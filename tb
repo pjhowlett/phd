@@ -1,0 +1,1150 @@
+## Chapter 4: Tuberculosis prevalence 
+
+require(epiR)
+require(ggplot2)
+require(tidyverse)
+require(gtsummary)
+require(broom)
+require(tidymodels)
+require(ggpubr)
+require(arsenal)
+require(eulerr)
+require(ggplotify)
+require(mice)
+require(pROC)
+require(lme4)
+require(splines)
+require(marginaleffects)
+require(rms)
+require(Hmisc)
+require(sjPlot)
+require(lattice)
+require(psych)
+require(ggrepel)
+
+
+qxh4 <- readRDS("/Users/phowlett/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Merge/qxh.rds")
+
+# Set wd 
+setwd("~/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Chapter 4 - TB")
+table(qxh4$sex, useNA = "ifany")
+
+my_controls <- tableby.control(
+  total = T,
+  test=F,
+  numeric.stats = c("medianq1q3", "Nmiss2"),
+  cat.stats = c("countpct", "Nmiss2"),
+  stats.labels = list(
+    medianq1q3 = "Median (Q1, Q3)", 
+    Nmiss2 = "Missing"
+  ))
+
+my_controls2 <- tableby.control(
+  total = T,
+  test=F,
+  numeric.stats = c("medianq1q3", "Nmiss2"),
+  cat.stats = c("countrowpct", "Nmiss2"),
+  stats.labels = list(
+    medianq1q3 = "Median (Q1, Q3)", 
+    Nmiss2 = "Missing"
+  ))
+
+########################
+# Descriptive analysis #
+########################
+
+##################
+# Prisma diagram #
+##################
+
+# In ers_gp, if NA make community keep others same 
+qxh4 <- qxh4 %>%
+  mutate(ers_gp = coalesce(ers_gp, "Community"))
+
+# Flow diagram 
+table(qxh4$ers_gp, useNA = "ifany")
+
+# Xpert or culture done 
+table(qxh4$cult_done, useNA = "ifany")
+table(qxh4$xp_done, useNA = "ifany")
+qxh4$tbtest_done <- ifelse(qxh4$cult_done == "Performed" | qxh4$xp_done == "Performed", "Yes", "No")
+
+x <- table(qxh4$tbtest_done,qxh4$ers_gp,  useNA = "ifany")
+x
+prop.table(x, 2)
+table(qxh4$tbtest_done, qxh4$xp_done, useNA = "ifany")
+
+table(qxh4$tb_type, useNA = "ifany")
+
+qxh4 %>% group_by(ers_gp) %>%
+  summarise(
+    all_tb = sum(tb_all == "TB", na.rm = TRUE),
+    xpert_tb = sum(xpert_pos == "Positive", na.rm = TRUE),
+    cult_tb_only = sum((final_res == "mtb_complex" & xpert_pos == "Negative"), na.rm = TRUE),
+    clin_tb = sum(tb_type == "Clinical", na.rm = TRUE)
+  )
+
+# list study ids if xpert if final_res == "mtb_complex" & xpert_pos == "Negative"
+x <- qxh4 %>% filter(final_res == "mtb_complex" & xpert_pos == "Negative") %>% select(study_id, f_name, s_name, ers_gp, final_res, xpert_pos, tb_type)
+x 
+# Any positive TB symptom screen
+
+table(qxh4$tbsymp_pos, qxh4$ers_gp, qxh4$tbtest_done, useNA = "ifany")
+
+# Among 45 comm members with no sputum sample, 15 (33%) had one or more reported TB symptoms
+
+# Miners pop
+qxh4min <-subset(qxh4, ers_gp != "Community")
+qxh4min$ers_gp <- fct_rev(qxh4min$ers_gp)
+
+qxh4comm <- subset(qxh4, ers_gp == "Community")
+
+
+#########################
+# Table of demographics #
+#########################
+
+# Table miners 
+table(qxh4min$group, qxh4min$mine_dur2, useNA = "ifany")
+
+tab4.1a <- tableby (tb_type ~ age + all_yrs2 + dust_zone + size_grp + silic_binlg + tb_pmh_join + comb_hiv + no_meals +
+                      smoking_comb + water, 
+                   data = qxh4min,
+                   control = my_controls)
+
+summ_tab4.1a <- summary(tab4.1a,
+                       digits=1, digits.pct=0)
+
+summ_tab4.1a
+
+write2word(summ_tab4.1a, "tab_4.1_minerdemog.docx")
+
+# Table demog community
+
+tab4.1b <- tableby (tb_all ~ age + sex + job_simp + silic_binlg + tb_type + tb_pmh_join + comb_hiv + no_meals +
+                     ever_smok_comb, 
+                   data = qxh4comm,
+                   control = my_controls)
+
+summ_tab4.1b <- summary(tab4.1b,
+                       digits=1, digits.pct=0)
+
+summ_tab4.1b
+
+# For supplement
+write2word(summ_tab4.1b, "tab_4.1_commdemog.docx")
+
+# List if ers_gp == "Community" and tb_all positive 
+x <- qxh4 %>% filter(ers_gp == "Community" & tb_all == "TB") %>% select(study_id, comb_hiv, job_simp)
+x
+# Community TB patients - drinks seller (HIV+), brokers with possible silicosis and severe TB, and mchemsha (HIV pos)
+
+tab4.1c <- tableby (tb_all ~ sleep + room_cat + con_live + con_work + return_home + home + share_child, 
+                   data = subset(qxh4min, ers_gp == "Miner"),
+                   control = my_controls)
+
+summ_tab4.1c <- summary(tab4.1c,
+                        digits=1, digits.pct=0)
+
+summ_tab4.1c
+
+write2word(summ_tab4.1c, "tab_4.1_cont_rf.docx")
+
+table(qxh4min$share_child, qxh4min$sleep, qxh4min$tb_all, useNA = "ifany")
+
+
+# Among those not living at the mines; 10% Mererani, 28% Arusha and 18% other locations reported sharing their place of sleeping with other miners 
+
+
+#######################
+# Yrs work and TB risk #
+#######################
+
+
+# Prevalence of TB according to years worked among miners and non-miners 
+tbyrs_prop <- qxh4min %>% 
+  group_by(ers_gp, all_yrs_cat2) %>%
+  summarise(
+    n = n(),
+    tb_cases = sum(tb_pos == "Yes", na.rm = TRUE),
+    prevalence = tb_cases / n,
+    .groups = "drop"
+  ) 
+
+tbyrs_prop
+
+fig4.1a <- ggplot(tbyrs_prop, aes(x = all_yrs_cat2, y = prevalence, fill = ers_gp)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = "Years worked in mining",
+    y = "TB prevalence (%)",
+    fill = "Group"
+  )   +  
+  scale_x_discrete(
+    labels = c(
+      "0-4 years"   = "0–4",
+      "5-9 years"   = "5–9",
+      "10-14 years" = "10–14",
+      "15-19 years" = "15–19",
+      ">=20 years"  = "≥20")) + 
+  facet_wrap(~ers_gp) + 
+  theme_pubr() +
+  theme(legend.position = "none")
+
+
+tbsil_prop <- qxh4min %>% 
+  group_by(ers_gp, cum_sil_cat) %>%
+  summarise(
+    n = n(),
+    tb_cases = sum(tb_pos == "Yes", na.rm = TRUE),
+    prevalence = tb_cases / n,
+    .groups = "drop"
+  ) 
+
+tbsil_prop
+
+fig4.1b <- ggplot(tbsil_prop, aes(x = cum_sil_cat, y = prevalence, fill = ers_gp)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "TB prevalence (%)"
+  ) +
+  facet_wrap(~ers_gp) + 
+  theme_pubr() +
+  theme(legend.position = "none")
+
+# Combine plots and save 
+fig4.1 <- ggarrange(fig4.1a, fig4.1b,
+                   ncol = 1, nrow = 2, 
+                   labels = c("A", "B"))
+fig4.1
+ggsave("fig_4.1_tbyrs_sil.png", plot = fig4.1, width = 8, height = 6)
+
+############################################
+# Table of Xpert results/culture by ers_gp #
+############################################
+
+# Reverse order of tb_when 
+qxh4$tb_when <- factor(qxh4$tb_when, levels = c("Screening TB", "Follow up TB"))
+
+table(qxh4$xpert_pos, useNA = "always")
+ 
+# Recode xpert_call such that if missing, and xp_done is "Performed", then xpert_call becomes "Negative"
+qxh4 <- qxh4 %>%
+  mutate(xpert_call2 = case_when(
+    xpert_pos == "Negative" ~ "Negative",
+    is.na(xpert_call) & xpert_pos == "Positive" ~ "Not recorded",
+    xp_done == "Not performed" ~ "Not performed",
+    TRUE ~ xpert_call
+  ))
+
+
+# redo order appropriately in this order high medium low Very low trace negative 
+qxh4$xpert_call2 <- factor(qxh4$xpert_call2, levels = c("High", "Medium", "Low", "Very low", "Trace", "Negative", "Not recorded", "Not performed"))
+
+tab4.2 <- tableby (ers_gp ~ xpert_call2 + final_res + tb_when, 
+                   data = qxh4,
+                   control = my_controls)
+
+summ_tab4.2 <- summary(tab4.2,
+                       digits=1, digits.pct=1)
+
+summ_tab4.2
+
+write2word(summ_tab4.2, "tab_4.2_xpert_cult.docx")
+
+table(qxh4$tb_type, qxh4$tb_when, useNA = "always")
+
+table(qxh4$xpert_call2, qxh4$poss_tb, useNA = "always")
+
+
+# Table of xpert_call and final_res - 275 had culture sent
+table(qxh4$final_res, useNA = "always")
+table(qxh4$xpert_call2, useNA = "always")
+
+# final_res change final_res if na to "Not done", keep rest same use ifelse 
+qxh4 <- qxh4 %>%
+  mutate(final_res = ifelse(is.na(final_res) & cult_done == "Not performed", "Not done", final_res))
+
+table(qxh4$final_res, useNA = "always")
+
+tab_xpcult <- tableby (final_res ~ xpert_call2, 
+                       data = qxh4,
+                       control = my_controls2) 
+
+summ_tab_xpcult <- summary(tab_xpcult,
+                           digits=1, digits.pct=1)
+
+summ_tab_xpcult
+
+write2word(summ_tab_xpcult, "tab_xpert_culture.docx")
+
+table(qxh4$xpert_pos, useNA = "always")
+
+# If final_res is negative and xpert_call is not NA, what is tb_pmh_join and tbyr_ago
+x <- qxh4 %>% filter(final_res == "negative" & xpert_pos == "Positive") %>% 
+  select(study_id, age, f_name, s_name, ers_gp, final_res, xpert_call, tb_pmh_join, tb_year, tb_yearx, cough_tb, fever, night_sweats, wt_loss)
+
+x
+
+x <- qxh4 %>% filter(final_res == "contaminated" & xpert_pos == "Positive") %>% 
+  select(study_id, f_name, s_name, ers_gp, final_res, xpert_call, tb_pmh_join, tb_year, tb_yearx, cough_tb, fever, night_sweats, wt_loss)
+
+x
+
+x <- qxh4 %>% filter(final_res == "Not done" & xpert_pos == "Positive") %>% 
+  select(study_id, ers_gp, final_res, xpert_call, tb_pmh_join, tb_year, tb_yearx, cough_tb, fever, night_sweats, wt_loss, poss_tb, rip)
+
+x
+
+# Of all negative culture with +ve sputum xpert, only 2 had previous TB, one 2 years ago (died before starting Rx) and one 10 years ago
+# 5/45 contaminated (10%)
+
+# What proportion who had previous TB reported improvement with treatment? 
+# X1153 , T1111, X1035, X0040 - felt better
+# X0955 - did not start treatment; has symptoms fever and cough
+# X0593 - died HIV positive
+# T0046 - died 
+
+# final_res and tb_pos by group
+table(qxh4$final_res, qxh4$xpert_pos, qxh4$group, useNA = "always")
+table(qxh4$tb_type, qxh4$group, useNA = "always")
+
+##################################################
+# Calculate weighted and non-weighted prevalence #
+##################################################
+
+# Import imputed data
+qxh_imp4 <- readRDS("/Users/phowlett/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Merge/qxh_imp.rds")
+
+# ers_gp, nas to community
+qxh_imp4 <- qxh_imp4 %>%
+  mutate(ers_gp = coalesce(ers_gp, "Community"))
+
+# Create tb_pos_num where "Yes" = 1, "No" = 0 
+qxh_imp4 <- qxh_imp4 %>%
+  mutate(tb_pos_num = ifelse(tb_pos == "Yes", 1, 0), 
+         tb_all_num = ifelse(tb_all == "TB", 1, 0))
+# Subset miners
+qxh_imp4_min <-subset(qxh_imp4, ers_gp == "Miner")
+
+# Calculate weighted prevalence
+weighted_prevalence <- qxh_imp4 %>%
+  group_by(ers_gp) %>%
+  summarise(
+    micro_prev = sum(as.numeric(tb_pos == "Yes") * ipw) / sum(ipw) * 100,
+    comb_prev  = sum(as.numeric(tb_all == "TB")  * ipw) / sum(ipw) * 100,
+    n = n(),
+    .groups = "drop"
+  )
+weighted_prevalence
+
+# Calculate weighted prevalence
+weighted_prevalence_sens <- qxh_imp4 %>%
+  group_by(ers_gp) %>%
+  summarise(
+    micro_prev = sum(as.numeric(tb_pos == "Yes") * ipw_sens) / sum(ipw_sens) * 100,
+    comb_prev  = sum(as.numeric(tb_all == "TB")  * ipw_sens) / sum(ipw_sens) * 100,
+    n = n(),
+    .groups = "drop"
+  )
+weighted_prevalence_sens
+
+# Nonweighted prevalence 
+non_weighted_prevalence <- qxh_imp4 %>%
+  group_by(ers_gp) %>%
+  summarise(
+    micro_cases = sum(tb_pos == "Yes", na.rm = TRUE),
+    comb_cases  = sum(tb_all == "TB", na.rm = TRUE),
+    micro_prev = mean(tb_pos == "Yes", na.rm = TRUE) * 100,
+    comb_prev  = mean(tb_all == "TB", na.rm = TRUE) * 100,
+    n = n(),
+    .groups = "drop"
+  )
+non_weighted_prevalence
+
+# Calculate 95% CI for prevalence using bootstrap for weighted prevalence
+set.seed(123)  # For reproducibility
+
+# Define groups
+groups <- unique(qxh_imp4$ers_gp)
+n_boot <- 1000
+
+# Function: bootstrap weighted prevalence (%) for a 0/1 variable
+boot_prev<- function(var, data) {
+  replicate(n_boot, {
+    idx <- sample.int(nrow(data), replace = TRUE)
+    bs  <- data[idx, ]
+    100 * sum(bs[[var]] * bs$ipw, na.rm = TRUE) / sum(bs$ipw, na.rm = TRUE)
+  })
+}
+
+boot_prev_unwt <- function(var, data) {
+  replicate(n_boot, {
+    idx <- sample.int(nrow(data), replace = TRUE)
+    bs  <- data[idx, ]
+    100 * mean(bs[[var]], na.rm = TRUE)
+  })
+}
+
+
+# Run bootstrap for tb_pos_num and tb_all_num
+boot_results_wt <- list(
+  tb_pos = boot_prev("tb_pos_num", qxh_imp4_min),
+  tb_all = boot_prev("tb_all_num", qxh_imp4_min)
+)
+head(boot_results_wt)
+
+boot_results_unwt <- list(
+  tb_pos = boot_prev_unwt("tb_pos_num", qxh_imp4_min),
+  tb_all = boot_prev_unwt("tb_all_num", qxh_imp4_min)
+)
+head(boot_results_unwt)
+
+# Summarise into a new data frame
+ci_miners_wt <- lapply(boot_results_wt, function(x) {
+  c(mean = mean(x),
+    lower = quantile(x, 0.025),
+    upper = quantile(x, 0.975))
+}) 
+ci_miners_wt
+ci_miners_unwt <- lapply(boot_results_unwt, function(x) {
+  c(mean = mean(x),
+    lower = quantile(x, 0.025),
+    upper = quantile(x, 0.975))
+})
+ci_miners_unwt
+
+to_df <- function(lst, type) {
+  bind_rows(lst, .id = "Outcome") %>%
+    rename(
+      mean  = mean,
+      lower = `lower.2.5%`,
+      upper = `upper.97.5%`
+    ) %>%
+    mutate(Type = type)
+}
+
+ci_table <- bind_rows(
+  to_df(ci_miners_wt,   "Weighted"),
+  to_df(ci_miners_unwt, "Unweighted")
+) %>%
+  mutate(
+    Group   = "Miner",
+    across(c(mean, lower, upper), ~ round(.x, 1)),
+    Prev_CI = sprintf("%.1f (%.1f, %.1f)", mean, lower, upper)
+  ) %>%
+  select(Group, Outcome, Type, Prev_CI) %>%
+  arrange(Outcome, Type)
+
+ci_table
+
+# Save as csv
+write.csv(ci_table, "tab_4.2_wt_tbprev.csv", row.names = FALSE)
+
+wald_ci <- function(x, n, conf.level = 0.95) {
+  p <- x / n
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  se <- sqrt(p * (1 - p) / n)
+  lower <- p - z * se
+  upper <- p + z * se
+  c(mean = p * 100,
+    lower = pmax(0, lower) * 100,
+    upper = pmin(1, upper) * 100)
+}
+
+# Apply Wald CI to micro_cases and comb_cases
+ci_micro <- mapply(function(x, n) wald_ci(x, n),
+                   non_weighted_prevalence$micro_cases,
+                   non_weighted_prevalence$n) %>%
+  t() %>%
+  as.data.frame()
+ci_micro
+ci_comb <- mapply(function(x, n) wald_ci(x, n),
+                  non_weighted_prevalence$comb_cases,
+                  non_weighted_prevalence$n) %>%
+  t() %>%
+  as.data.frame()
+ci_comb
+
+# Add back to original df
+non_weighted_prevalence_ci <- non_weighted_prevalence %>%
+  bind_cols(
+    ci_micro %>%
+      rename(micro_mean = mean, micro_lower = lower, micro_upper = upper),
+    ci_comb %>%
+      rename(comb_mean = mean, comb_lower = lower, comb_upper = upper)
+  ) %>%
+  mutate(
+    micro_CI = sprintf("%.1f (%.1f, %.1f)", micro_mean, micro_lower, micro_upper),
+    comb_CI  = sprintf("%.1f (%.1f, %.1f)", comb_mean, comb_lower, comb_upper)
+  ) %>%
+  select(ers_gp, n,
+         micro_cases, micro_CI,
+         comb_cases,  comb_CI)
+
+non_weighted_prevalence_ci
+
+# Save as csv
+write.csv(non_weighted_prevalence_ci, "tab_4.2_unwt_tbprev.csv")
+
+#######################
+# Logistic regression #
+#######################
+
+
+# Current miners 
+
+# Logistic regression, weights ipw adjust for all_yrs_cat2, age_cat, silic_binlg, comb_hiv, no_meals, ever_smok_comb
+
+# Relevel tb_pmh_join to have "No" as reference
+qxh_imp4_min$tb_pmh_join <- relevel(factor(qxh_imp4_min$tb_pmh_join), ref = "No")
+
+# No HIV positive persons with silicosis had TB - therefore no interaction possible 
+table(qxh_imp4_min$silic_binlg, qxh_imp4_min$comb_hiv, qxh_imp4_min$tb_pos, useNA = "ifany")
+
+table(qxh_imp4_min$tb_pos, useNA = "ifany")
+
+# Check for missing values in variables to be used in model
+vars <- c("all_yrs_cat2", "age_cat", "silic_binlg", 
+          "tb_pmh_join", "comb_hiv", "no_meals", "smoking_comb")
+
+# 32 missing silicosis - not imputed
+qxh_imp4_min %>%
+  summarise(across(all_of(vars), 
+                   ~ sum(is.na(.)) , 
+                   .names = "{.col}_NAprop"))
+
+
+# Regression
+
+# Direct effect of years on TB risk, full model 
+
+
+tb_4.1a <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+              data = qxh_imp4_min,
+              weights = ipw_y,
+              family = quasibinomial())
+
+
+summary(tb_4.1a)
+
+tb_4.1a_sum <- tidy(tb_4.1a) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  dplyr::select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+tb_4.1a_sum
+
+# Write to csv
+write.csv(tb_4.1a_sum, "tab_4.3_fulltb_logreg.csv", row.names = FALSE)
+
+
+# Sensitivity analysis also removing tb 
+tb_4.1 <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat  + comb_hiv + no_meals + smoking_comb + room_cat,
+              data = qxh_imp4_min,
+              weights = ipw_y,
+              family = quasibinomial())
+
+
+tb_4.1_sum <- tidy(tb_4.1) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+tb_4.1_sum
+
+# Write to csv
+write.csv(tb_4.1_sum, "tab_4.3_tb_fullnopmhtb.csv", row.names = FALSE)
+
+# Predicted probabilities of TB by years worked
+pred_tb <- predictions(
+  model = tb_4.1,
+  newdata = datagrid(all_yrs_cat2 = unique(qxh_imp4_min$all_yrs_cat2)),
+  type = "response"
+)
+pred_tb
+
+# Plot predicted probabilities of TB by years worked
+fig4.2 <- ggplot(pred_tb, aes(x = all_yrs_cat2, y = estimate)) +
+  geom_point(size = 3) +
+  geom_line(group = 1) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    x = "Years worked in mining (categories)",
+    y = "Predicted TB prevalence"
+  ) +
+  theme_pubr()
+
+fig4.2
+
+# Sensitivity analysis among only those no silicosis 
+
+# Direct effect of years on TB risk, full model 
+
+
+tb_4.1b <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = subset(qxh_imp4_min, silic_binlg == "no"),
+               weights = ipw_y,
+               family = quasibinomial())
+
+summary(tb_4.1b)
+
+tb_4.1b_sum <- tidy(tb_4.1b) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  dplyr::select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+tb_4.1b_sum
+
+# Write to csv
+write.csv(tb_4.1b_sum, "tab_4.3_fulltb_nosil.csv", row.names = FALSE)
+
+# Adjust for water
+table(qxh_imp4_min$water, qxh_imp4_min$tb_pos_num, useNA = "ifany")
+data = subset(qxh_imp4_min, silic_binlg == "no")
+
+tb_4.1bc <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat + silic_binlg + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat+ water,
+               data = subset(qxh_imp4_min),
+               weights = ipw_y,
+               family = quasibinomial())
+
+
+tb_4.1b <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat + silic_binlg*water + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = subset(qxh_imp4_min),
+               weights = ipw_y,
+               family = quasibinomial())
+
+lrtest(tb_4.1bc, tb_4.1b)  # p = 0.07
+
+summary(tb_4.1b)
+
+tb_4.1bc_sum <- tidy(tb_4.1b) %>%
+  mutate(
+    OR       = round(exp(estimate), 2),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 2),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 2),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  )  %>%
+  dplyr::select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+print(tb_4.1bc_sum, n = Inf)
+
+# Write to csv
+write.csv(tb_4.1bc_sum, "tab_4.3_tb_logreg_water.csv", row.names = FALSE)
+
+# Plot predicted probabilities of TB by silic_binlg worked and water
+
+# Get the coefficient names for all water levels
+water_terms <- grep("^water", names(coef(tb_4.1b)), value = TRUE)
+water_terms
+# e.g. "waterRarely" "waterOften" "waterAlways"
+
+# Plot just those terms (as ORs)
+
+p <- plot_predictions(
+  model = tb_4.1b,
+  condition = c("water", "silic_binlg"),
+  type = "response",
+  transform = NULL
+) +
+  labs(
+    x = "Reported water use",
+    y = "Predicted probability of TB",
+    color = "Silicosis"
+  ) +
+  scale_color_manual(
+    values = c("no" = "#1F77B4", "yes" = "#D62728"),  # choose colors
+    labels = c("No", "Yes")
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))  +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + 
+  theme_pubr(base_size = 16) +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+p
+
+# Save plot
+ggsave("fig_4.3_tbpred_water.png", plot = p, width = 10, height = 8)
+
+# Adjust for mask
+
+table(qxh_imp4_min$mask, qxh_imp4_min$tb_pos_num, useNA = "ifany")
+
+tb_4.1cc <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat + silic_binlg  + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat+ mask,
+               data = qxh_imp4_min,
+               weights = ipw_y,
+               family = quasibinomial())
+
+tb_4.1c <- glm(tb_pos_num ~ all_yrs_cat2 + age_cat + silic_binlg*mask + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               weights = ipw_y,
+               family = quasibinomial())
+
+lrtest(tb_4.1cc, tb_4.1c)  # p = 0.08
+
+summary(tb_4.1c)
+
+tb_4.1cc_sum <- tidy(tb_4.1cc) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  select(term,OR_CI, p.value)
+
+
+print(tb_4.1cc_sum, n = Inf)
+
+# Write to csv
+write.csv(tb_4.1cc_sum, "tab_4.3_tb_logreg_mask.csv", row.names = FALSE)
+
+q <- plot_predictions(
+  model = tb_4.1c,
+  condition = c("mask", "silic_binlg"),
+  type = "response",
+  transform = NULL
+) +
+  labs(
+    x = "Reported mask use",
+    y = "Predicted probability of TB", 
+    color = "Silicosis"
+  ) +
+  scale_color_manual(
+    values = c("no" = "#1F77B4", "yes" = "#D62728"),  # choose colors
+    labels = c("No", "Yes")
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1))  +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + 
+  theme_pubr(base_size = 13) +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+q
+
+r <- ggarrange(p, q,
+          ncol = 2, nrow = 1, 
+          labels = c("A", "B"))
+
+
+
+table(qxh4min$water, qxh4min$mask, useNA = "ifany")
+table(qxh4min$water, useNA = "ifany")
+dim(qxh4min)
+# Fit logistic regression model with restricted cubic splines for cumulative silicosis exposure
+# RCS for cum_sil with k knots
+k <- c(0.05, 0.35, 0.65, 0.95)
+k_sil <- quantile(qxh_imp4_min$cum_sil, k, na.rm = TRUE)
+k_sil
+
+tb_4.2 <- glm(tb_pos_num ~ rcs(cum_sil, k_sil) + age_cat + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+              data = qxh_imp4_min,
+              weights = ipw_y,
+              family = quasibinomial())
+
+tb_4.2_sum <- tidy(tb_4.2) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  select(term, OR_CI, p.value)
+
+tb_4.2_sum
+
+# Save as csv
+write.csv(tb_4.2_sum, "tab_4.4_tb_logreg_rcs.csv", row.names = FALSE)
+
+# Plot of predicted probabilities of silicosis by cum_sil in lr_rcs 
+fig4.2 <- plot_predictions(
+  model = tb_4.2,
+  condition = c("cum_sil", "tb_pmh_join"),
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig4.2 <- fig4.2 +
+  labs(
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Probability of TB",
+    color = "Previous TB"
+  ) + 
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  scale_x_continuous(
+    limits = c(0,100)
+  ) +
+  theme_pubr(base_size = 13) +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold")
+  ) +
+  guides(fill = "none")
+fig4.2
+
+ggsave("fig_4.2_tbpred_rcs.png", plot = fig4.2, width = 8, height = 5)
+
+tb_4.2a <- glm(tb_pos_num ~ rcs(cum_sil, k_sil) + age_cat + silic_binlg*water + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+              data = qxh_imp4_min,
+              weights = ipw_y,
+              family = quasibinomial())
+
+# Plot of predicted probabilities of silicosis by cum_sil in lr_rcs 
+fig4.2a <- plot_predictions(
+  model = tb_4.2a,
+  condition = c("cum_sil", "water", "silic_binlg"),
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig4.2a <- fig4.2a +
+  labs(
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of TB"
+  ) +
+  theme_pubr()
+
+fig4.2a
+
+tb_4.2a <- glm(tb_pos_num ~ rcs(cum_sil, k_sil) + age_cat + silic_binlg*mask + tb_pmh_join + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               weights = ipw_y,
+               family = quasibinomial())
+
+# Plot of predicted probabilities of silicosis by cum_sil in lr_rcs 
+fig4.2a <- plot_predictions(
+  model = tb_4.2a,
+  condition = c("cum_sil", "mask", "silic_binlg"),
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig4.2b <- fig4.2a +
+  labs(
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of TB"
+  ) +
+  theme_pubr()
+
+fig4.2b
+
+# Ex-miners 
+
+qxh_imp4_ex <- subset(qxh_imp4, ers_gp == "Ex-miner")
+table(qxh_imp4_ex$tb_pos, qxh_imp4_ex$comb_hiv, useNA = "ifany")
+
+# Relevel tb_pmh_join to have "No" as reference
+qxh_imp4_ex$tb_pmh_join <- relevel(factor(qxh_imp4_ex$tb_pmh_join), ref = "No")
+
+ex_m <- tableby(tb_pos ~ all_yrs_cat3 + age_cat + silic_binlg + tb_pmh_join + no_meals + smoking_comb + room_cat,
+                data = qxh_imp4_ex, 
+                control = my_controls2)
+
+summ_ex_m <- summary(ex_m,
+                      digits=1, digits.pct=0)
+
+summ_ex_m
+
+write2word(summ_ex_m, "~tab_exmin_tb")
+
+# variables you want to test one by one
+vars <- c("all_yrs_cat3", "age_cat", "silic_binlg", 
+          "tb_pmh_join", "no_meals", "smoking_comb", "room_cat")
+
+# run univariate glm for each variable
+univ_results <- map_dfr(vars, function(v) {
+  f <- as.formula(paste("tb_pos_num ~", v))
+  m <- glm(f, data = qxh_imp4_ex, family = binomial())
+  
+  tidy(m) %>%
+    filter(term != "(Intercept)") %>%   # drop intercept
+    mutate(
+      variable = v,
+      OR       = exp(estimate),
+      CI_lower = exp(estimate - 1.96 * std.error),
+      CI_upper = exp(estimate + 1.96 * std.error),
+      OR_CI    = sprintf("%.1f (%.1f, %.1f)", OR, CI_lower, CI_upper)
+    ) %>%
+    select(variable, term, OR_CI, p.value)
+})
+
+univ_results
+
+################
+# Tb mortality #
+################
+
+tab_2 <- tableby(rip ~ ers_gp + age + all_yrs2 + sex + comb_hiv + tb_pmh_join + xpert_res + no_meals,
+                 data = qxh4,
+                 control = my_controls)
+
+summ_tab_2 <- summary(tab_2,
+                      digits=1, digits.pct=0)
+
+summ_tab_2
+
+write2word(summ_tab_2, "~tab_tb_alive")
+
+# Reshape data to long format
+sx_tb_alive <- select(qxh4, tb_alive, cough_tb, fever, wt_loss, night_sweats)
+
+long_data <- sx_tb_alive %>%
+  pivot_longer(cols = c(cough_tb, fever, wt_loss, night_sweats), 
+               names_to = "symptom", 
+               values_to = "value")
+
+table(qxh$tb_alive, useNA = "ifany")
+
+# Calculate the proportion of value 1 for each symptom within each tb_alive group, ignore NA values 
+proportion_data <- long_data %>%
+  group_by(tb_alive, symptom) %>%
+  summarise(sympton = sum(value == 1, na.rm = TRUE),
+            n = n(),
+    proportion = mean(value == 1, na.rm = TRUE))
+proportion_data
+
+proportion_data <- proportion_data %>%
+  mutate(symptom = recode(symptom,
+                          "cough_tb"        = "Cough",
+                          "fever"        = "Fever",
+                          "night_sweats" = "Night sweats",
+                          "wt_loss"  = "Weight loss"))
+
+# Create the bar chart with proportions, faceted by symptom and x-axis as tb_alive
+
+p <- ggplot(proportion_data, aes(x = tb_alive, y = proportion, fill = tb_alive)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "TB Status",
+       y = "Proportion", 
+       fill = NULL) +
+  theme_minimal() +
+  facet_wrap(~ symptom) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_pubr()
+
+p
+
+ggsave("fig_4.3_tbsurv_symptoms.png", plot = p, width = 8, height = 8)
+
+# Table of risk factors for death by rip
+
+tab_5 <- tableby(rip ~ age + sex + all_yrs + job_role + comb_hiv + tb_pmh_join 
+                 + no_meals + cough_tb + fever + night_sweats + wt_loss 
+                 + xpert_call + silic_binlg + maj_cat + cum_sil + ptld + prop_destroyed_lung
+                 + poss_tb + miliary,
+                 data = qxh4,
+                 control = my_controls)
+
+summ_tab_5 <- summary(tab_5,
+                      digits=1, digits.pct=0)
+
+summ_tab_5
+
+write2word(summ_tab_5, "~tab_rip")
+
+# List id if comb_hiv is positive and rip is Died on treatment 
+table(qxh4$rip, useNA = "ifany")
+qxh4 %>%
+  filter(rip == "Died on treatment") %>%
+  select(study_id, age, cohort_names, group, f_name, s_name, add_name, xpert_call, tb_type, wt_loss, silic_binlg, 
+         mobile_2, mobile, nok, nok_mobile, first_name, second_name, manager_mobile)
+
+# Load tb_died.xlsx
+tb_died <- readxl::read_xlsx("tb_died.xlsx")
+tb_died
+
+tb_died_plot <- tb_died %>%
+  mutate(
+    study_id = fct_reorder(study_id, time),     # will flip, so this is fine
+    hiv = factor(hiv)                           # ensure it's a factor for legend
+  )
+
+table(tb_died_plot$hiv, useNA = "ifany")
+
+# Lollipop graph, colour by hiv status, lable with cause, length of lollipop is time in months, facet by tb_type
+fig_4.3 <- ggplot(tb_died_plot, aes(x = study_id, y = time, color = hiv)) +
+  geom_segment(aes(xend = study_id, y = 0, yend = time), linewidth = 0.8) +
+  geom_point(size = 2.8) +
+  geom_text_repel(
+    aes(label = cause),
+    size = 5.2,
+    direction = "x",
+    nudge_y = 0.2,
+    min.segment.length = 0,
+    box.padding = 0.2,
+    point.padding = 0.2,
+    max.overlaps = Inf
+  ) +
+  coord_flip() +
+  facet_grid(tb_type ~ ., scales = "free_y", space = "free_y") +
+  scale_y_continuous(
+    limits = c(0, 14),
+    breaks = seq(0, 12.6, by = 2.5),
+    name = "Time to death (months)",
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_color_manual(
+    values = c("HIV negative" = "#0072B2",   # blue
+               "HIV positive" = "#D55E00")   # reddish orange
+  ) +
+  labs(x = "Participant", color = "HIV status") +
+  theme_pubr() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y  = element_blank(),
+    legend.title = element_blank(),
+    strip.text   = element_text(size = 16, face = "bold"), 
+    axis.text.x = element_text(size = 14), 
+    axis.title.x = element_text(size = 16),
+    legend.text = element_text(size = 16)
+    
+  )
+
+fig_4.3
+
+# Save figure
+ggsave("fig_4.3_tb_death.png", plot = fig_4.3, width = 10, height = 14)
+
+#################
+# Mediation analysis 
+#################
+
+require(mediation)
+
+table(qxh_imp4_min$silic_binlg, qxh_imp4_min$silic_blnum, useNA = "ifany")
+
+med_mod <- glm(silic_blnum ~ all_yrs_cat2 + tb_pmh_join + age_cat + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               family = binomial())
+
+dir_mod <- glm(tb_pos_num ~ silic_blnum + all_yrs_cat2 + tb_pmh_join + age_cat + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               family = binomial())
+
+# --- settings ---------------------------------------------------------------
+control_level <- "0-4 years"
+all_levels <- c("0-4 years", "5-9 years", "10-14 years", "15-19 years", ">=20 years")
+treat_levels <- setdiff(all_levels, control_level)
+
+# --- helpers ----------------------------------------------------------------
+run_med <- function(trt) {
+  mediate(
+    med_mod, dir_mod,
+    treat = "all_yrs_cat2",
+    mediator = "silic_blnum",
+    control.value = control_level,
+    treat.value   = trt,
+    boot = TRUE, sims = 1000
+  )
+}
+
+# format "xx.x% (ll.l%, uu.u%)"
+fmt_pct_ci <- function(est, lo, hi, digits = 1) {
+  mult <- 100
+  sprintf(paste0("%.", digits, "f%% (%.", digits, "f%%, %.", digits, "f%%)"),
+          est*mult, lo*mult, hi*mult)
+}
+
+extract_pct_summary <- function(med_obj, trt) {
+  s <- summary(med_obj)
+  tibble(
+    `Exposure (vs 0–4 yrs)` = trt,
+    `Indirect (ACME)`       = fmt_pct_ci(s$d.avg,    s$d.avg.ci[1],  s$d.avg.ci[2]),
+    `Direct (ADE)`          = fmt_pct_ci(s$z.avg,    s$z.avg.ci[1],  s$z.avg.ci[2]),
+    `Total effect`          = fmt_pct_ci(s$tau.coef, s$tau.ci[1],    s$tau.ci[2]),
+    `Proportion mediated`   = fmt_pct_ci(s$n.avg,    s$n.avg.ci[1],  s$n.avg.ci[2]),
+    `p (ACME)`  = s$d.avg.p,
+    `p (ADE)`   = s$z.avg.p,
+    `p (Total)` = s$tau.p
+  )
+}
+
+# --- run + assemble ---------------------------------------------------------
+med_results   <- map(treat_levels, run_med)
+med_table_pct <- map2_dfr(med_results, treat_levels, extract_pct_summary) %>%
+  mutate(`Exposure (vs 0–4 yrs)` = factor(`Exposure (vs 0–4 yrs)`, levels = treat_levels)) %>%
+  arrange(`Exposure (vs 0–4 yrs)`)
+
+
+
+# Save as csv
+write.csv(med_table_pct, "tab_mediate_full.csv", row.names = FALSE)
+
+
+######## NOW WITH NO PMH TB ########
+
+
+med_mod <- glm(silic_blnum ~ all_yrs_cat2 + age_cat + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               family = binomial())
+
+dir_mod <- glm(tb_pos_num ~ silic_blnum + all_yrs_cat2 + age_cat + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               family = binomial())
+
+# --- run + assemble ---------------------------------------------------------
+med_results   <- map(treat_levels, run_med)
+med_table_pct <- map2_dfr(med_results, treat_levels, extract_pct_summary) %>%
+  mutate(`Exposure (vs 0–4 yrs)` = factor(`Exposure (vs 0–4 yrs)`, levels = treat_levels)) %>%
+  arrange(`Exposure (vs 0–4 yrs)`)
+
+
+# Save as csv
+write.csv(med_table_pct, "tab_mediate_nopmhtb.csv", row.names = FALSE)
+
+
+######## NOW MEDIATED BY PMH TB ########
+
+
+med_mod <- glm(tb_pmh_join ~ all_yrs_cat2 + silic_blnum + age_cat + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               family = binomial())
+
+dir_mod <- glm(tb_pos_num ~ silic_blnum + tb_pmh_join + all_yrs_cat2 + age_cat + comb_hiv + no_meals + smoking_comb + room_cat,
+               data = qxh_imp4_min,
+               family = binomial())
+
+# --- run + assemble ---------------------------------------------------------
+med_results   <- map(treat_levels, run_med)
+med_table_pct <- map2_dfr(med_results, treat_levels, extract_pct_summary) %>%
+  mutate(`Exposure (vs 0–4 yrs)` = factor(`Exposure (vs 0–4 yrs)`, levels = treat_levels)) %>%
+  arrange(`Exposure (vs 0–4 yrs)`)
+
+
+
+# Save as csv
+write.csv(med_table_pct, "tab_mediate_tbpmh.csv", row.names = FALSE)
