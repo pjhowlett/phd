@@ -1,0 +1,2237 @@
+## Chapter 3: Silicosis prevalence
+
+require(epiR)
+require(ggplot2)
+require(tidyverse)
+require(gtsummary)
+require(broom)
+require(tidymodels)
+require(ggpubr)
+require(arsenal)
+require(eulerr)
+require(ggplotify)
+require(mice)
+require(pROC)
+require(lme4)
+require(splines)
+require(marginaleffects)
+require(rms)
+require(Hmisc)
+require(sjPlot)
+require(lattice)
+require(psych)
+
+
+qxh <- readRDS("/Users/phowlett/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Merge/qxh.rds")
+
+# Set wd 
+setwd("~/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Chapter 3 - silic prev")
+table(qxh$sex, useNA = "ifany")
+
+########################
+# Descriptive analysis #
+########################
+
+my_controls <- tableby.control(
+  total = T,
+  test=F,
+  numeric.stats = c("medianq1q3", "Nmiss2"),
+  cat.stats = c("countpct", "Nmiss2"),
+  stats.labels = list(
+    medianq1q3 = "Median (Q1, Q3)", 
+    Nmiss2 = "Missing"
+  ))
+
+# Table of demographics vars by group of participants 
+
+table(qxh$group, qxh$size_grp, useNA = "ifany")
+tab_1 <- tableby(group ~ age + sex + all_yrs + cum_sil + job_role + size_grp + marital + educ_simple 
+                 + ses + sleep + home + return_home + smoking_comb + cann_comb + alc_comb + comb_hiv + tb_pmh_join + water + mask, 
+                 data = qxh, 
+                 control = my_controls)
+
+summ_tab_1 <- summary(tab_1,
+                      digits=1, digits.pct=0)
+
+write2word(summ_tab_1, "tab_3.1_demographics_all.docx")
+
+qxh_sil <- qxh %>% 
+  filter(cxr_done == "Performed") # 48 no CXR
+
+qxh_sil <- qxh_sil %>% 
+  filter(quality != "unreadable") # 1284
+
+table(qxh_sil$ers_gp, useNA = "ifany")
+
+qxh_sil <- qxh %>% 
+  filter(ers_gp %in% c("Miner", "Ex-miner")) # 1214
+
+table(qxh_quality$group, useNA = "ifany")
+
+
+table(qxh_sil$ers_gp, useNA = "ifany")
+
+
+qxh_quality <- qxh %>% 
+  filter(cxr_done == "Performed") # 1293
+
+table(qxh_quality$ers_gp, useNA = "ifany")
+
+qxh_quality <- qxh_quality %>% 
+  filter(quality != "unreadable") # 1284
+
+
+
+
+# Table of CXR quality
+table(qxh_quality$quality, useNA = "ifany")
+
+qual_summ <- qxh_quality %>%
+  select(quality, starts_with("unread/")) %>%
+  pivot_longer(cols = starts_with("unread/"), names_to = "variable", values_to = "value") %>%
+  group_by(variable, quality) %>%
+  summarise(
+    n = sum(value == 1, na.rm = TRUE),
+    percent = round(100 * n / sum(!is.na(value)), 1),
+    .groups = "drop"
+  ) %>%
+  mutate(variable = str_remove(variable, "^unread/")) %>%
+  pivot_wider(
+    names_from = quality,
+    values_from = c(n, percent),
+    names_glue = "{.value}_{quality}"
+  ) %>% select(-n_1,-percent_1)
+
+qual_summ
+
+# Capitalise the first letter of each word in the variable names and turn _ into space then save as csv
+qual_summ <- qual_summ %>%
+  mutate(Quality_domain = str_to_title(str_replace_all(variable, "_", " ")), 
+         Acceptable = paste0(n_2, " (", percent_2, "%)"),
+         Technical_defect = paste0(n_3, " (", percent_3, "%)")) %>% 
+  select(Quality_domain, Acceptable, Technical_defect)
+qual_summ
+write.csv(qual_summ, "CXR_quality_summary.csv", row.names = FALSE)
+
+# Two by two table of silic_blnum and silic_blnum_ph
+cm <- table(qxh_quality$silic_binlg_ph, qxh_quality$silic_binlg, useNA = "ifany")
+cm
+epiR::epi.tests(cm)
+agree <- sum(diag(cm)) / sum(cm) # 0.88
+disagree <- 1 - agree # 0.12
+spec <- cm[4] / sum(cm[4], cm[3]) # 0.92
+sens <- cm[1] / (cm[1] + cm[2]) # 0.87
+spec 
+sens
+cohen.kappa(cm)$kappa
+table(qxh_sil$maj_cat_ph, qxh_sil$maj_cat, useNA = "ifany")
+
+# Histogram of all_years (number of years worked), bin by single year, facet_wrap by group
+fig3.1a <- ggplot((subset(qxh, group != "Community")), aes(x = all_yrs, fill = group)) +
+  geom_histogram(binwidth = 1) +
+  facet_wrap(~ group) +
+  labs(x = "Years worked",
+       y = "Frequency") +
+  scale_fill_brewer(palette = "Set1") +
+  theme_pubr() +
+  guides(fill = guide_legend(title = NULL))
+  
+fig3.1a
+ggsave("fig3.1a_yrswk_gp.png", fig3.1a, width = 8, height = 6)
+
+# Density histogram of cumulative silica exposure
+fig3.1b <- ggplot((subset(qxh, group != "Community")), aes(x = cum_sil, fill = group)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ group) +
+  labs(x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+       y = "Density") +
+  theme_pubr() +
+  scale_fill_brewer(palette = "Set1") +
+  guides(fill = guide_legend(title = NULL))
+fig3.1b 
+
+# Save the density histogram
+ggsave("fig3.1b_denshist_exp.png", fig3.1b, width = 8, height = 6)
+
+# Arrange fig3.1a and fig3.1b into a single figure
+fig3.1 <- ggarrange(fig3.1a, fig3.1b, ncol = 1, nrow = 2, labels = c("A", "B"),
+                    common.legend = TRUE, legend = "bottom")
+fig3.1
+ggsave("fig3.1_yrswk_exp.png", fig3.1, width = 9, height = 10)
+
+describe(qxh_sil$cum_sil)
+
+# Heat map of silicosis prevalence by all_years vs dust_zone facet wrap by ers_gp
+
+# Summarise prevalence by year, zone, and group
+heat_data <- qxh_sil %>%
+  filter(!is.na(dust_zone3)) %>%
+  group_by(ers_gp, all_yrs_cat4, dust_zone3) %>%
+  summarise(
+    num = sum(silic_blnum, na.rm = TRUE),
+    n = n(),
+    prevalence = round(mean(silic_blnum, na.rm = TRUE) * 100, 0),
+    print = paste0(num, "/", n, " (", prevalence, "%)"),
+    .groups = "drop"
+  )
+heat_data
+heat_data <- heat_data %>%
+  filter(!is.na(all_yrs_cat4)) 
+
+# Heat map
+fig3.2 <- ggplot(heat_data, aes(x = all_yrs_cat4, y = dust_zone3, fill = prevalence)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = print), size = 4) +
+  scale_fill_gradient(low = "#f7fbff", high = "orange", name = "Prevalence (%)") +
+  facet_wrap(~ ers_gp) +
+  labs(x = "Years of work",
+    y = "Dust  Zone"
+  ) +
+  theme_pubr() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+fig3.2
+
+ggsave("fig3.2_ht_prevdust.png", fig3.2, width = 8, height = 6)
+
+table(qxh_sil$silic_binlg, qxh_sil$all_yrs_cat, qxh_sil$ers_gp, useNA = "ifany")
+table(qxh_sil$ers_gp)
+
+# Calculate % per group 
+heat_pct <- qxh_sil %>%
+  filter(!is.na(all_yrs_cat), !is.na(ers_gp), cxr_done == "Performed") %>%
+  group_by(ers_gp, all_yrs_cat) %>%
+  mutate(group_total = n()) %>%  # total in group, including maj_cat = NA
+  ungroup() %>%
+  filter(!is.na(maj_cat)) %>%  # now exclude NAs for plotting
+  group_by(ers_gp, all_yrs_cat, maj_cat) %>%
+  summarise(pct = 100 * n() / unique(group_total), .groups = "drop") %>%
+  mutate(maj_cat = factor(maj_cat, levels = rev(sort(unique(maj_cat)))))
+
+heat_pct
+
+# Stacked bar plot of prevalence by years of work and ILO category
+heat_pct <- heat_pct %>%
+  filter(maj_cat != "maj_0")
+
+fig3.3 <- ggplot(subset(heat_pct, maj_cat != "NA"), aes(x = all_yrs_cat, y = pct, fill = maj_cat)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ ers_gp) +
+  labs(x = "Years of work",
+    y = "Silicosis Prevalence (%)",
+    fill = "maj_cat"
+  ) +  
+  scale_x_discrete(
+    labels = c(
+      "0-4 years"   = "0–4",
+      "5-9 years"   = "5–9",
+      "10-14 years" = "10–14",
+      "15-19 years" = "15–19",
+      ">=20 years"  = "≥20")) + 
+  scale_fill_discrete(
+    name = "Major Category",
+    labels = c("3+", "2", "1")) + 
+  theme_pubr()
+fig3.3
+ggsave("fig3.3_bar_prevcat.png", fig3.3, width = 8, height = 6)
+
+# Pct by mine size group and all_yrs_cat
+# Calculate % per group 
+size_pct <- qxh_sil %>%
+  filter(
+    ers_gp == "Miner",
+    cxr_done == "Performed",
+    !is.na(all_yrs_cat),
+    !is.na(silic_blnum), 
+    !is.na(dust_zone)
+  ) %>%
+  group_by(size_grp, all_yrs_cat, dust_zone) %>%
+  summarise(
+    num = sum(silic_blnum, na.rm = TRUE),
+    n = n(),
+    prevalence = round(mean(silic_blnum, na.rm = TRUE) * 100, 0),
+    print = paste0(num, "/", n, " (", prevalence, "%)"),
+    .groups = "drop"
+  )
+
+size_pct
+
+size_pct_cumsil <- qxh_sil %>%
+  filter(
+    ers_gp == "Miner",
+    cxr_done == "Performed",
+    !is.na(cum_sil_cat),
+    !is.na(silic_blnum), 
+    !is.na(dust_zone)
+  ) %>%
+  group_by(size_grp, cum_sil_cat) %>%
+  summarise(
+    num = sum(silic_blnum, na.rm = TRUE),
+    n = n(),
+    prevalence = round(mean(silic_blnum, na.rm = TRUE) * 100, 0),
+    print = paste0(num, "/", n, " (", prevalence, "%)"),
+    .groups = "drop"
+  )
+
+size_pct_cumsil
+
+ggplot(size_pct, aes(x = all_yrs_cat, y = prevalence, fill = size_grp)) +
+  geom_col(position = "dodge", width = 0.8) +
+  labs(
+    x = "Years worked in mining",
+    y = "Silicosis prevalence",
+    fill = "Mine size"
+  ) +
+  theme_pubr(base_size = 12) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  facet_wrap(~ dust_zone)
+
+ggplot(size_pct_cumsil, aes(x = cum_sil_cat, y = prevalence, fill = size_grp)) +
+  geom_col(position = "dodge", width = 0.8) +
+  labs(
+    x = "Cumulative RCS (mg/m3-yrs)",
+    y = "Silicosis prevalence",
+    fill = "Mine size"
+  ) +
+  theme_pubr(base_size = 12) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+
+# Table of mine size group by job with %
+tab_sizejob <- tableby(size_grp ~ silic_bin + all_yrs_cat + job_role + dust_zone, 
+                       data = subset(qxh_sil, ers_gp == "Miner"),
+                       control = my_controls)
+summ_tab_sizejob <- summary(tab_sizejob)
+summ_tab_sizejob
+# Table 2 - important risk factors for silicosis, according to silic_binlg status 
+table(qxh_sil$all_yrs_cat3, useNA = "ifany")
+
+tab_2 <- tableby(silic_binlg ~ age + ers_gp + all_yrs_cat3 + cum_sil_cat + latency_cat + job_role + size_grp + tb_type + tb_pmh_join + comb_hiv +
+                   ever_smok_comb + water, 
+                 data = qxh_sil,
+                 control = my_controls)
+summ_tab_2 <- summary(tab_2,
+                      digits=1, digits.pct=0)
+write2word(summ_tab_2, "tab_3.2_risk_factor_sil.docx")
+
+table(qxh_sil$silicotb, useNA = "ifany")
+
+# Reorder silicotb None, Tuberculosis, Silicotuberculosis, Silicosis 
+qxh_sil$silicotb <- factor(qxh_sil$silicotb, 
+                          levels = c("None", "Tuberculosis", "Silicotuberculosis", "Silicosis"),
+                          ordered = TRUE)
+
+tab_2b <- tableby(silicotb ~ age + ers_gp + all_yrs_cat4 + cum_sil_cat + latency_cat + job_role + size_grp + tb_type + tb_pmh_join + comb_hiv +
+                   ever_smok_comb + water, 
+                 data = qxh_sil,
+                 control = my_controls)
+summ_tab_2b <- summary(tab_2b,
+                      digits=1, digits.pct=0)
+
+write2word(summ_tab_2b, "tab_3.2b_risk_factor_siltb.docx")
+
+
+# Drop NAs to avoid confusion
+venn_data <- qxh_sil %>%
+  filter(!is.na(tb_all), !is.na(silic_binlg), !is.na(tb_pmh_join), tb_pmh_join != "Unknown") %>%
+  mutate(
+    TB = tb_all == "TB",
+    Silicosis = silic_binlg == "yes",
+    pmh_tb = tb_pmh_join == "Yes",
+  )
+
+table(qxh_sil$tb_all, qxh_sil$silic_binlg, qxh_sil$tb_pmh_join, useNA = "ifany")
+
+# Create eulerr input from logical vectors
+fit <- euler(venn_data[, c("TB", "Silicosis", "pmh_tb")])
+fit
+
+# Plot with custom labels and counts
+fig3.4 <- as.ggplot(plot(fit,
+     fills = c("#FF9999", "#66B3FF", "#99FF99"),
+     labels = list(
+       labels = c("Active TB", "Silicosis", "Previous TB"), 
+       fontface = "bold",
+       cex = 1.4
+     ),
+     quantities = TRUE  
+))
+
+fig3.4
+fig3.4 <- fig3.4 + annotate("text", x = 0.15, y = 0.1, label = "bold('None')*' 890'",
+                  size = 6,
+                  parse = TRUE)
+fig3.4
+ggsave("fig3.4_venn_siltb.jpg", fig3.4, width = 10, height = 8)
+
+# Calculate prevalence of silic_binlg by job_role_detailed
+silic_prevalence <- qxh %>%
+  filter(cxr_done == "Performed") %>%
+  filter(!is.na(job_detail) & job_detail != "Non-miner") %>%
+  group_by(job_detail) %>%
+  mutate(silic_binlg_num = ifelse(silic_bin == "yes", 1, 0)) %>%
+  summarise(
+    dis = sum(silic_binlg_num, na.rm = TRUE),
+    n = n(),
+    prevalence = round(mean(silic_binlg_num, na.rm = TRUE) * 100, 1),
+    ex_driller = sum(main_role_2x___1 + main_role_2___1, na.rm = TRUE),
+    xdp = round(ex_driller *100 / n,0),
+    ex_blaster = sum(main_role_2x___2 + main_role_2___2, na.rm = TRUE),
+    xbp = round(ex_blaster *100/ n,0),
+    ex_below_carry = sum(main_role_2x___3 + main_role_2___3, na.rm = TRUE),
+    xcp = round(ex_below_carry *100/ n,0),
+    dur = median(mine_dur, na.rm = TRUE),
+    q1 = quantile(mine_dur, 0.25, na.rm = TRUE), 
+    q3 = round(quantile(mine_dur, 0.75, na.rm = TRUE),1),
+  ) %>%
+  arrange(desc(prevalence)) %>% 
+  mutate(across(where(is.numeric), ~round(.x, 2)))
+silic_prevalence
+
+# Neaten table use paste to make col Silicosis = dis/n (prevalence)
+prev_roles <- silic_prevalence %>%
+  mutate(Silicosis = paste(dis, " (", prevalence, "%)", sep = ""), 
+         Ex_driller = paste(ex_driller, " (", xdp,"%)", sep = ""), 
+         Ex_blaster = paste(ex_blaster, " (", xbp,"%)", sep = ""),
+         Ex_carrier = paste(ex_below_carry, " (", xcp,"%)", sep = ""), 
+         Median_IQR = paste(dur, " (", q1, ",", q3,")", sep = "")) %>%
+  select(job_detail, n, Silicosis, Ex_driller, Ex_blaster,Ex_carrier, Median_IQR)
+
+# Write to word as table 
+write.csv(prev_roles, "tab_3.3_previous_exposures.csv", )
+
+# Create a table of proportions  using tidyverse mean()
+silic_prop <- qxh_sil %>% 
+  filter(cxr_done == "Performed") %>%
+  group_by(cumsil_c10) %>%
+  summarise(
+    silic_prop = round(mean(silic_blnum, na.rm = TRUE) * 100, 1),
+    sil_n = sum(silic_blnum, na.rm = TRUE), # number with silicosis
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(cumsil_c10 = factor(cumsil_c10, levels = unique(cumsil_c10))) # Ensure correct order of categories
+silic_prop
+
+# Plot the proportion of silicosis by cumulative silica exposure categories
+fig3.6a <- ggplot(silic_prop, aes(x = cumsil_c10, y = silic_prop)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Silicosis prevalence",
+       x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+       y = "Silicosis prevalence(%)") +
+  theme_pubr(base_size = 8) +
+  scale_x_discrete(labels = function(x) gsub("(^\\[|\\])", "", x))  # Remove brackets from labels
+fig3.6a
+
+# Create a table of proportions  using tidyverse mean()
+silic_prop2 <- qxh_sil %>% 
+  filter(cxr_done == "Performed", latency >= 10) %>%
+  group_by(cumsil_c10) %>%
+  summarise(
+    silic_prop = round(mean(silic_blnum, na.rm = TRUE) * 100, 1),
+    sil_n = sum(silic_blnum, na.rm = TRUE), # number with silicosis
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(cumsil_c10 = factor(cumsil_c10, levels = unique(cumsil_c10))) # Ensure correct order of categories
+silic_prop2
+sum(silic_prop2$n) # 610 persons
+
+# Plot the proportion of silicosis by cumulative silica exposure categories
+fig3.6b <- ggplot(silic_prop2, aes(x = cumsil_c10, y = silic_prop)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Silicosis prevalence (>= 10 years latency)",
+       x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+       y = "Silicosis prevalence(%)") +
+  theme_pubr(base_size = 8) +
+  scale_x_discrete(labels = function(x) gsub("(^\\[|\\])", "", x))  # Remove brackets from labels
+fig3.6b
+
+# Prevalence by group - all 
+table(qxh_sil$ers_gp, useNA = "ifany")
+silic_prop_gpall <- qxh_sil %>% 
+  filter(cxr_done == "Performed") %>%
+  group_by(ers_gp, cumsil_c10) %>%
+  summarise(
+    silic_prop = round(mean(silic_blnum, na.rm = TRUE) * 100, 1),
+    n = n(),
+    sil_n = sum(silic_blnum, na.rm = TRUE), 
+    .groups = "drop"
+  ) %>%
+  mutate(
+    cumsil_c10 = factor(cumsil_c10, levels = unique(cumsil_c10)))
+sum(silic_prop_gpall$n)# 1,220 persons
+silic_prop_gpall
+
+# Rearrange table to wide cols sum_sil, miner_sil_n, Ex_sil_n, miner_n, ex_n
+wide_sil_prop <- silic_prop_gpall %>%
+  pivot_wider(names_from = ers_gp, values_from = c(silic_prop, sil_n, n)) 
+wide_sil_prop
+wide_sil_all <- wide_sil_prop %>%
+  rename(
+    cumsil_c10 = cumsil_c10,
+    miner_sil_prop = silic_prop_Miner,
+    miner_sil_n = sil_n_Miner,
+    miner_n = n_Miner,
+    ex_sil_prop = `silic_prop_Ex-miner`,
+    ex_sil_n = `sil_n_Ex-miner`,
+    ex_n = `n_Ex-miner`) %>% 
+  mutate(
+    all_sil = miner_sil_n + ex_sil_n, 
+    all_n = miner_n + ex_n,
+    all_prop = round((miner_sil_n + ex_sil_n) / (miner_n + ex_n) * 100, 1)
+  ) %>% 
+  select(cumsil_c10, miner_sil_n,  miner_n, miner_sil_prop, ex_sil_n, ex_n, , ex_sil_prop, all_sil, all_n, 
+         all_prop) %>% 
+  mutate(miner_sil_prop = round(miner_sil_prop, 0),
+         ex_sil_prop = round(ex_sil_prop, 0),
+         all_prop = round(all_prop, 0)) %>%
+  mutate(miner_prev = paste(miner_sil_n,"/",miner_n, " (", miner_sil_prop, "%)", sep = ""),
+         ex_prev = paste(ex_sil_n,"/",ex_n, " (", ex_sil_prop, "%)", sep = ""),
+         all_prev = paste(all_sil,"/",all_n, " (", all_prop, "%)", sep = "")) 
+
+tab_prev <- wide_sil_all %>%
+  select(cumsil_c10, miner_prev, ex_prev, all_prev) %>%
+  rename(
+    `Cumulative RCS (mg/m^3-yrs)` = cumsil_c10,
+    Miners = miner_prev,
+    Ex_miners = ex_prev,
+    Total = all_prev
+  )
+
+tab_prev
+
+# move table to wide with cols 0-10, 10-20 etc, and rows Miners, Ex_miners and Total 
+tab_prev_wide <- tab_prev %>%
+  pivot_longer(cols = -`Cumulative RCS (mg/m^3-yrs)`, 
+               names_to = "Group", 
+               values_to = "Prevalence") %>%
+  pivot_wider(names_from = `Cumulative RCS (mg/m^3-yrs)`, 
+              values_from = Prevalence)
+
+# Save as csv
+write.csv(tab_prev_wide, "Fig3.5_prev_wide.csv", row.names = FALSE)
+
+fig3.6c_group <- ggplot(silic_prop_gpall, aes(x = cumsil_c10, y = silic_prop, fill = ers_gp)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Silicosis prevalence by group",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Silicosis prevalence(%)",
+    fill = "Group") +
+  theme_pubr(base_size = 8) +
+  scale_x_discrete(labels = function(x) gsub("(^\\[|\\])", "", x))  # clean x-axis labels
+fig3.6c_group
+
+# Prevalence by group - > 10 years latency
+silic_prop_by_group <- qxh_sil %>% 
+  filter(cxr_done == "Performed", latency >= 10) %>%
+  group_by(ers_gp, cumsil_c10) %>%
+  summarise(
+    silic_prop = round(mean(silic_blnum, na.rm = TRUE) * 100, 1),
+    sil_n = sum(silic_blnum, na.rm = TRUE), 
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    cumsil_c10 = factor(cumsil_c10, levels = unique(cumsil_c10)))
+sum(silic_prop_by_group$n)
+
+# Rearrange table to wide cols sum_sil, miner_sil_n, Ex_sil_n, miner_n, ex_n
+wide_sil_prop <- silic_prop_by_group %>%
+  pivot_wider(names_from = ers_gp, values_from = c(silic_prop, sil_n, n)) 
+wide_sil_prop
+wide_sil_pro10 <- wide_sil_prop %>%
+  rename(
+    cumsil_c10 = cumsil_c10,
+    miner_sil_prop = silic_prop_Miner,
+    miner_sil_n = sil_n_Miner,
+    miner_n = n_Miner,
+    ex_sil_prop = `silic_prop_Ex-miner`,
+    ex_sil_n = `sil_n_Ex-miner`,
+    ex_n = `n_Ex-miner`) %>% 
+  mutate(
+    all_sil = miner_sil_n + ex_sil_n, 
+    all_n = miner_n + ex_n,
+    all_prop = round((miner_sil_n + ex_sil_n) / (miner_n + ex_n) * 100, 1)
+  ) %>% 
+  select(cumsil_c10, miner_sil_n,  miner_n, miner_sil_prop, ex_sil_n, ex_n, , ex_sil_prop, all_sil, all_n, 
+         all_prop) %>%
+  mutate(miner_sil_prop = round(miner_sil_prop, 0),
+         ex_sil_prop = round(ex_sil_prop, 0),
+         all_prop = round(all_prop, 0)) %>%
+  mutate(miner_prev = paste(miner_sil_n,"/",miner_n, " (", miner_sil_prop, "%)", sep = ""),
+         ex_prev = paste(ex_sil_n,"/",ex_n, " (", ex_sil_prop, "%)", sep = ""),
+         all_prev = paste(all_sil,"/",all_n, " (", all_prop, "%)", sep = "")) 
+
+
+tab_prev_lat <- wide_sil_pro10 %>%
+  select(cumsil_c10, miner_prev, ex_prev, all_prev) %>%
+  rename(
+    `Cumulative RCS (mg/m^3-yrs)` = cumsil_c10,
+    Miners = miner_prev,
+    Ex_miners = ex_prev,
+    Total = all_prev
+  )
+
+
+# move table to wide with cols 0-10, 10-20 etc, and rows Miners, Ex_miners and Total 
+tab_prevlat_wide <- tab_prev_lat %>%
+  pivot_longer(cols = -`Cumulative RCS (mg/m^3-yrs)`, 
+               names_to = "Group", 
+               values_to = "Prevalence") %>%
+  pivot_wider(names_from = `Cumulative RCS (mg/m^3-yrs)`, 
+              values_from = Prevalence)
+tab_prevlat_wide
+# Save as csv
+write.csv(tab_prevlat_wide, "Fig3.5_prev_widelat.csv", row.names = FALSE)
+  
+sum(silic_prop_by_group$n) # 610 persons
+
+fig3.6d_group_lat <- ggplot(silic_prop_by_group, aes(x = cumsil_c10, y = silic_prop, fill = ers_gp)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Silicosis prevalence by group (>=10 years latency)",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Silicosis prevalence(%)",
+    fill = "Group") +
+  theme_pubr(base_size = 8) +
+  scale_x_discrete(labels = function(x) gsub("(^\\[|\\])", "", x))  # clean x-axis labels
+fig3.6d_group_lat
+
+# Arrange onto 4 panel plot, shared legend 
+fig3.5a <- ggarrange(fig3.6a, fig3.6c_group, ncol = 2, nrow = 1, labels = c("A", "B"),
+                    common.legend = TRUE, legend = "bottom")
+fig3.5b <- ggarrange(fig3.6b, fig3.6d_group_lat, ncol = 2, nrow = 1, labels = c("C", "D"),
+                    common.legend = TRUE, legend = "bottom")                    
+
+ggsave("fig3.5a_bar_expresp_all.jpg", fig3.5a, width = 8, height = 3.5)
+ggsave("fig3.5b_bar_expresp_lat.jpg", fig3.5b, width = 8, height = 3.5)
+
+# LIst study id, all_yrs, cumsil, latency, job_role, size_grp, tb_type, tb_pmh_join, comb_hiv, silic_binlg
+# for someone who has cum_sil > 50 and latency >= 10
+qxh_sil %>%
+  filter(cum_sil > 50, is.na(latency)) %>%
+  select(study_id, c_yj1,c_t, c_yj2, hrs_worked, days_mine_1,  mine_dur2,silic_blnum, all_yrs, cum_sil, latency, job_role, silic_binlg) %>%
+  arrange(desc(cum_sil)) %>%
+  head(10)
+table(qxh_sil$hrs_worked, qxh_sil$days_mine_1, qxh_sil$silic_binlg, useNA = "ifany")
+
+####################
+# Generalisability #
+####################
+
+qxh_miner <- qxh_sil %>%
+  filter(ers_gp == "Miner")
+
+# Table by proportion of attendance
+tab_3.4 <- tableby(prop_cat ~ age + sex + all_yrs + mine_size + block + comb_hiv + tb_pmh_join + tb_type,
+                 data = qxh_miner,
+                 control = my_controls)
+
+summ_tab3.4 <- summary(tab_3.4,
+                      digits=1, digits.pct=0)
+
+write2word(summ_tab3.4, "tab_3.4_rf_prop_attend.docx")
+
+table(qxh_miner$prop_cat, qxh_miner$tb_all, useNA = "ifany")
+
+# Table of miner characterisitics by size_grp 
+qxh_miner2 <- qxh_miner 
+# Create a new variable size_grp Unknown if na
+qxh_miner2$size_grp <- as.character(qxh_miner2$size_grp)
+qxh_miner2$size_grp[is.na(qxh_miner2$size_grp)] <- "Unknown"
+qxh_miner2$size_grp <- factor(
+  qxh_miner2$size_grp,
+  levels = c("0-25", "26-100", ">100", "Unknown")
+)
+tab3.4b <- tableby(size_grp ~ age + sex + all_yrs + dust_zone + comb_hiv + tb_pmh_join + water,
+                 data = qxh_miner2,
+                 control = my_controls)
+
+summ_tab3.4b <- summary(tab3.4b,
+                      digits=1, digits.pct=0)
+
+write2word(summ_tab3.4b, "tab_3.4b_miner_sizegrp.docx")
+table(qxh_miner$size_grp, useNA = "ifany")
+
+# table of cohort_name and size_grp if prop_cat to >= 0.75 using with subset
+with(subset(qxh_miner, prop_cat == ">= 0.75"),
+     table(cohort_names, size_grp, useNA = "ifany"))
+
+# Summary table of prevalence of silicosis water by all_yrs_cat2 with qxh 
+water_sum <- qxh_miner %>% 
+  group_by(all_yrs_cat2, water) %>%
+  summarise(
+    n = n(),
+    sil_n = sum(silic_blnum, na.rm = TRUE),
+    sil_prop = round(mean(silic_blnum, na.rm = TRUE) * 100, 1),
+    .groups = "drop"
+  )
+
+# Drop NA rows in water and change - in years to a _
+water_sum <- water_sum %>%
+  mutate(all_yrs_cat2 = str_replace_all(all_yrs_cat2, "-", " to "))
+
+# Create col prev where its n/sil_n (sil_prop)
+water_sum <- water_sum %>%
+  mutate(prev = paste0(sil_n, "/", n, " (", sil_prop, "%)")) %>%
+  select(all_yrs_cat2, water, prev)
+water_sum
+# Make wide, with all_yrs_cat2 as cols and water as rows
+water_sum_wide <- water_sum %>%
+  pivot_wider(names_from = all_yrs_cat2, values_from = c(prev)) 
+water_sum_wide
+
+# Save as csv
+write.csv(water_sum_wide, "tab_3.5_water_prev.csv", row.names = FALSE)
+
+table(qxh_miner$water, qxh_miner$silic_blnum, useNA = "ifany")
+
+##################################################
+# Calculate weighted and non-weighted prevalence #
+##################################################
+
+# Import imputed data
+qxh_imp <- readRDS("/Users/phowlett/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Merge/qxh_imp.rds")
+
+# In qxh_imp, filter to ers_gp == "Miner" or ers_gp == "Ex-miner"
+qxh_imp_m <- qxh_imp %>%
+  filter(ers_gp %in% c("Miner", "Ex-miner")) %>% 
+  filter(cxr_done == "Performed") %>% 
+  filter(quality != "unreadable") 
+table(qxh_imp_m$silic_binlg, useNA = "ifany")
+table(qxh_imp_m$ers_gp, useNA = "ifany")
+
+table(qxh_imp_m$silic_binlg, qxh_imp_m$ers_gp, useNA = "ifany")
+table(qxh_imp_m$silic_binlg11, qxh_imp_m$ers_gp, useNA = "ifany")
+table(qxh_imp_m$size_grp, useNA = "ifany")
+
+# Calculate weighted prevalence
+weighted_prevalence <- qxh_imp_m %>%
+  group_by(ers_gp) %>%
+  summarise(
+    prev_mine = sum(silic_blnum * ipw) / sum(ipw) * 100,
+    n = n()
+  )
+weighted_prevalence
+
+# Calculate weighted prevalence
+weighted_prevalence_sens <- qxh_imp_m %>%
+  group_by(ers_gp) %>%
+  summarise(
+    prev_mine = sum(silic_blnum * ipw_sens) / sum(ipw_sens) * 100,
+    n = n()
+  )
+weighted_prevalence_sens
+
+# Nonweighted prevalence 
+non_weighted_prevalence <- qxh_imp_m %>%
+  group_by(ers_gp) %>%
+  summarise(
+    prevalence = mean(silic_blnum, na.rm = TRUE) * 100,
+    n = n()
+  )
+non_weighted_prevalence
+
+# Calculate 95% CI for prevalence using bootstrap for weighted prevalence
+set.seed(123)  # For reproducibility
+n_boot <- 1000  
+# Get unique groups
+groups <- unique(qxh_imp_m$ers_gp)
+
+# Bootstrap weighted prevalence by group
+boot_weighted <- lapply(groups, function(g) {
+  group_data <- qxh_imp_m %>% filter(ers_gp == g)
+  
+  replicate(n_boot, {
+    sample_indices <- sample(1:nrow(group_data), replace = TRUE)
+    boot_sample <- group_data[sample_indices, ]
+    sum(boot_sample$silic_blnum * boot_sample$ipw) / sum(boot_sample$ipw) * 100
+  })
+})
+names(boot_weighted) <- groups
+
+# Bootstrap unweighted prevalence by group
+boot_unweighted <- lapply(groups, function(g) {
+  group_data <- qxh_imp_m %>% filter(ers_gp == g)
+  
+  replicate(n_boot, {
+    sample_indices <- sample(1:nrow(group_data), replace = TRUE)
+    boot_sample <- group_data[sample_indices, ]
+    mean(boot_sample$silic_blnum, na.rm = TRUE) * 100
+  })
+})
+names(boot_unweighted) <- groups
+
+# Summarise CIs
+summary_boot <- function(boot_list) {
+  lapply(boot_list, function(x) {
+    c(mean = mean(x),
+      lower = quantile(x, 0.025),
+      upper = quantile(x, 0.975))
+  }) %>%
+    bind_rows(.id = "ers_gp")
+}
+
+ci_weighted <- summary_boot(boot_weighted)
+ci_unweighted <- summary_boot(boot_unweighted)
+
+# View results
+ci_weighted
+ci_unweighted
+
+# Combine ci_weighted ans ci_unweighted into a single data frame - no renaming, simply 
+# bind rows
+ci_combined <- bind_rows(
+  ci_weighted %>% mutate(type = "Weighted"),
+  ci_unweighted %>% mutate(type = "Unweighted")
+)
+ci_combined
+# Rename ers_gp    mean `lower.2.5%` `upper.97.5%` type and place type at front 
+ci_combined <- ci_combined %>%
+  rename(
+    Group = ers_gp,
+    mean = mean,
+    lower = `lower.2.5%`,
+    upper = `upper.97.5%`,
+    type = type
+  ) %>%
+  select(type, Group, mean, lower, upper)
+
+# Round mean, lower and upper values to 1 decimal place, then paste to Prev_CI
+ci_combined <- ci_combined %>%
+  mutate(
+    Prev_CI = paste0(round(mean, 1), " (", round(lower, 1), ", ", round(upper, 1), ")")
+  ) %>%
+  select(type, Group, Prev_CI)
+
+ci_combined
+
+# Exact confidence intervals
+binom.test(31, 86, conf.level = 0.95)
+
+# Normal confidence intervals for ex-miners 31/86
+wald_ci <- function(x, n, conf.level = 0.95) {
+  p_hat <- x / n
+  z <- qnorm(1 - (1 - conf.level) / 2)
+  se <- sqrt(p_hat * (1 - p_hat) / n)
+  lower <- p_hat - z * se
+  upper <- p_hat + z * se
+  round(c(lower, upper), 3)
+}
+wald_ci(31, 86, conf.level = 0.95)
+
+# Repeat for accelerated silicosis 
+# Get unique groups
+groups <- unique(qxh_imp_m$ers_gp)
+
+# Bootstrap weighted prevalence by group
+boot_weighted <- lapply(groups, function(g) {
+  group_data <- qxh_imp_m %>% filter(ers_gp == g)
+  
+  replicate(n_boot, {
+    sample_indices <- sample(1:nrow(group_data), replace = TRUE)
+    boot_sample <- group_data[sample_indices, ]
+    sum(boot_sample$acc_sil * boot_sample$ipw) / sum(boot_sample$ipw) * 100
+  })
+})
+names(boot_weighted) <- groups
+
+# Bootstrap unweighted prevalence by group
+boot_unweighted <- lapply(groups, function(g) {
+  group_data <- qxh_imp_m %>% filter(ers_gp == g)
+  
+  replicate(n_boot, {
+    sample_indices <- sample(1:nrow(group_data), replace = TRUE)
+    boot_sample <- group_data[sample_indices, ]
+    mean(boot_sample$acc_sil, na.rm = TRUE) * 100
+  })
+})
+names(boot_unweighted) <- groups
+
+# Summarise CIs
+summary_boot <- function(boot_list) {
+  lapply(boot_list, function(x) {
+    c(mean = mean(x),
+      lower = quantile(x, 0.025),
+      upper = quantile(x, 0.975))
+  }) %>%
+    bind_rows(.id = "ers_gp")
+}
+
+ci_weighted <- summary_boot(boot_weighted)
+ci_unweighted <- summary_boot(boot_unweighted)
+
+# View results
+ci_weighted
+ci_unweighted
+
+# Prevalence of silicosis that has all_yrs2 <= 10 
+silicosis_acc10 <- qxh_imp_m %>%
+  filter(all_yrs2 <= 10) %>%
+  group_by(ers_gp) %>%
+  summarise(
+    cases = sum(silic_blnum, na.rm = TRUE),
+    prevalence = mean(silic_blnum, na.rm = TRUE) * 100,
+    n = n()
+  )
+
+silicosis_21_prev <- qxh_imp_m %>%
+  group_by(ers_gp) %>%
+  summarise(
+    cases = sum(silic_blnum21, na.rm = TRUE),
+    prevalence = mean(silic_blnum21, na.rm = TRUE) * 100,
+    n = n()
+  )
+silicosis_21_prev
+
+acc_silprev <- qxh_imp_m %>%
+  group_by(ers_gp) %>%
+  summarise(
+    cases = sum(acc_sil, na.rm = TRUE),
+    prevalence = mean(acc_sil, na.rm = TRUE) * 100,
+    n = n()
+  )
+acc_silprev
+binom.test(8, 86, conf.level = 0.95)
+binom.test(6, 75, conf.level = 0.95)
+wald_ci(116, 1083, conf.level = 0.95)
+wald_ci(236, 1083)
+wald_ci(40, 86)
+
+#############################################
+#  Comparison of coh_ext and non_coh cohort #
+#############################################
+
+table(qxh$high_att, useNA = "ifany")
+
+# Create cohort population 
+qxh_coh <- qxh %>%
+  filter(group == "Cohort miner") 
+
+my_controls2 <- tableby.control(
+  total = T,
+  test= T,
+  numeric.stats = c("medianq1q3", "Nmiss2"),
+  cat.stats = c("countpct", "Nmiss2"),
+  stats.labels = list(
+    medianq1q3 = "Median (Q1, Q3)", 
+    Nmiss2 = "Missing"
+  ))
+
+# Table of characteristics coh_ext 
+table(qxh_coh$ext, useNA = "ifany")
+
+tab_3.5 <- tableby(ext ~ age + all_yrs + job_role + size_grp + tb_pmh_join 
+                   + silic_binlg + tb_type, 
+                 data = qxh_coh,
+                 control = my_controls2)
+
+summ_tab_3.5 <- summary(tab_3.5,
+                      digits=1, digits.pct=1)
+
+write2word(summ_tab_3.5, "tab_3.5_ext_comparison.docx")
+
+#################################
+#  Comparison of ex-miner group #
+#################################
+
+# Create ex-miner population
+qxh_ex <- qxh %>%
+  filter(group == "Ex-miner")
+
+# Simple table of characteristics of ex-miners
+tab_3.6 <- tableby( ~ age + all_yrs + all_yrs_cat + tb_pmh_join + hiv + ever_smok_comb, 
+                 data = qxh_ex,
+                 control = my_controls)
+summ_tab_3.6 <- summary(tab_3.6,
+                      digits=1, digits.pct=1)
+write2word(summ_tab_3.6, "tab_3.6_ex_miner.docx")
+
+
+#############################
+# Modelling primary outcome #
+#############################
+
+# Decision whether to include age as a covariate
+cor(qxh_imp_m$age, qxh_imp_m$all_yrs, use = "pairwise.complete.obs")
+cor(qxh_imp_m$age, qxh_imp_m$cum_sil, use = "pairwise.complete.obs")
+# pcor is 0.6 - moderate correlation 
+# Mainly adjusting for time period of work
+# but there is wide variability in age of first working - therefore not approp to use for adjustment for period of work 
+# It may also introduce some latency effect, but this is perhaps not the best way to look at this - can measure latency directly 
+# Or censor by > 10 years latency 
+# Therefore not using age
+
+# Select miners from the imputed data
+qxh_m_sil <- qxh_imp_m %>% filter(ers_gp == "Miner")
+
+cor(qxh_m_sil$age, qxh_m_sil$all_yrs, use = "pairwise.complete.obs")
+
+# Now with restricted cubic spline instead of NS - possible in GLM 
+
+# Create spline basis for age (3 degrees of freedom = 4 knots) - for glmer as RCS not possible
+# qxh_m_sil <- qxh_m_sil %>% mutate(
+    #ns_age_1 = ns(age, df = 3)[, 1],
+    #ns_age_2 = ns(age, df = 3)[, 2],
+    #ns_age_3 = ns(age, df = 3)[, 3])
+
+# In size_grp replace NA with "Unknown" use replace_na for clustering
+qxh_m_sil$size_grp <- as.character(qxh_m_sil$size_grp)
+qxh_m_sil$size_grp[is.na(qxh_m_sil$size_grp)] <- "Unknown"
+table(qxh_m_sil$size_grp, useNA = "ifany")
+qxh_m_sil$size_grp <- factor(
+  qxh_m_sil$size_grp,
+  levels = c("0-25", "26-100", ">100", "Unknown")
+)
+
+# Fit mixed effects logistic regression cluster intercept on size_grp
+re_yrs <- glmer(
+  silic_blnum ~ all_yrs_cat2 + 
+    (1 |size_grp),
+  data =qxh_m_sil,
+  family = binomial) 
+
+re2 <- glmer(silic_blnum ~ all_yrs_cat2 + (1 + all_yrs_cat2 | size_grp), 
+      data = qxh_m_sil, 
+      family = binomial(link = "logit"),
+      control = glmerControl(optimizer = "bobyqa", 
+                             optCtrl = list(maxfun = 2e5)))
+summary(re2)
+
+
+summary(re_yrs)
+ranef(re_yrs)
+re_plot <- dotplot(ranef(re_yrs, condVar = TRUE))
+re_plot
+# Save dotplot as image 
+png("Fig_supp_dotplot.png", width = 2000, height = 1600, res = 300)
+print(re_plot)  # Required for lattice plots
+dev.off()
+
+summary(re2)
+ranef(re2)
+dotplot(ranef(re2, condVar = TRUE))
+
+# Summarise coefficients without tidy
+re_sum <- summary(re_yrs)$coefficients %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "term") %>%
+  mutate(
+    OR       = round(exp(Estimate), 1),
+    CI_lower = round(exp(Estimate - 1.96 * `Std. Error`), 1),
+    CI_upper = round(exp(Estimate + 1.96 * `Std. Error`), 1),
+    p.value  = round(`Pr(>|z|)`, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+re_sum
+
+# Summarise coefficients without tidy
+re_sum <- summary(re2)$coefficients %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "term") %>%
+  mutate(
+    OR       = round(exp(Estimate), 1),
+    CI_lower = round(exp(Estimate - 1.96 * `Std. Error`), 1),
+    CI_upper = round(exp(Estimate + 1.96 * `Std. Error`), 1),
+    p.value  = round(`Pr(>|z|)`, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+re_sum
+table(qxh_m_sil$dust_zone3, useNA = "ifany")
+# Fit logistic regression model no clustering by size_grp
+lr_yrs <- glm(
+  silic_blnum ~ all_yrs_cat2 + dust_zone3,
+  data = qxh_m_sil,
+  family = binomial
+)
+summary(lr_yrs)
+
+# Summarise coefficients with tidy
+lr_mod_sum <- tidy(lr_yrs) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+lr_mod_sum
+lr_mod_sum <- lr_mod_sum %>%
+  select(term, OR_CI) %>%
+  mutate(term = str_remove(term, "^all_yrs_cat2")) %>% 
+  filter(term != "(Intercept)")
+lr_mod_sum
+# Save summary of logistic regression model to csv
+write.csv(lr_mod_sum, "tab3.7_miners_lr_yrs.csv", row.names = FALSE)
+
+# Predictions for logistic regression model
+pred_yrs <- predictions(
+  model = lr_yrs,
+  newdata = datagrid(all_yrs_cat2 = unique(qxh_m_sil$all_yrs_cat2), 
+                     dust_zone3 = "High"),
+  type = "response"
+)
+pred_yrs
+table(qxh_m_sil$dust_zone3, useNA = "ifany")
+
+# Write to df, round to 2 dp and make into Estimate (2.5 %, 97.5 %)
+pred_yrs_df <- as.data.frame(pred_yrs) %>%
+  mutate(
+    Estimate = round(estimate, 2),
+    `2.5 %` = round(conf.low, 2),
+    `97.5 %` = round(conf.high, 2)
+  ) %>%
+  select(all_yrs_cat2, Estimate, `2.5 %`, `97.5 %`)
+# Combine Estimate and CI into a single column
+pred_yrs_df <- pred_yrs_df %>%
+  mutate(
+    Estimate_CI = paste0(Estimate, " (", `2.5 %`, ", ", `97.5 %`, ")")
+  ) %>%
+  select(all_yrs_cat2, Estimate_CI)
+pred_yrs_df
+
+# LR test between mixed effects model and logistic regression model
+# No better fit with RE - also suggested by a standard deviation of approximately 16% in the baseline odds of silicosis 
+# between mine sizes 
+# Furthermore, no difference in model fit between two models, p = 0.41
+anova(re_yrs, lr_yrs, test = "Chisq") # p = 0.55
+
+qxh_m_sil$tb_pmh_join <- relevel(as.factor(qxh_m_sil$tb_pmh_join), ref = "No")
+qxh_m_sil$ever_smok_comb <- relevel(as.factor(qxh_m_sil$ever_smok_comb), ref = "No")
+#k <- c(0.05, 0.35, 0.65, 0.95)
+#k_age <- quantile(qxh_m_sil$age, k, na.rm = TRUE)
+
+# In tb_pmh_join, replace "Unknown" with NA 
+table(qxh_m_sil$water, useNA = "ifany")
+
+# Make binary water using ifelse, never = never, else = water 
+qxh_m_sil$smoking_comb <- factor(qxh_m_sil$smoking_comb, levels = c("No", "Current", "Ex-smoker"))
+
+lr_yrs_size <- glm(silic_blnum ~ all_yrs_cat2*size_grp + dust_zone3, data = qxh_m_sil, family = binomial)
+lr_yrs_smok <- glm(silic_blnum ~ all_yrs_cat2 + smoking_comb, qxh_m_sil, family = binomial)
+lr_yrs_water <- glm(silic_blnum ~ all_yrs_cat2 + water + size_grp, qxh_m_sil, family = binomial)
+lr_yrs_mask <- glm(silic_blnum ~ all_yrs_cat2 + mask, qxh_m_sil, family = binomial)
+lr_yrs_dusty <- glm(silic_blnum ~ all_yrs_cat2 + dusty, qxh_m_sil, family = binomial)
+fin_yrs <- glm(silic_blnum ~ all_yrs_cat2 + dust_zone3 + size_grp + water, 
+            data = qxh_m_sil, family = binomial)
+fin_yrs_int <- glm(silic_blnum ~ all_yrs_cat2*water + size_grp + dust_zone3, 
+               data = qxh_m_sil, family = binomial)
+table(qxh_m_sil$water, useNA = "ifany")
+
+lrtest(lr_yrs_smok, lr_yrs) # p = 0.30
+lrtest(lr_yrs_size, lr_yrs) # p = 0.10
+lrtest(lr_yrs_water, lr_yrs) # p = 0.07
+lrtest(lr_yrs_mask, lr_yrs) # p = 0.82
+lrtest(lr_yrs_dusty, lr_yrs) # p = 0.25
+lrtest(fin_yrs, lr_yrs) # p = 0.01
+lrtest(fin_yrs_int, fin_yrs) # p = 0.01
+
+# Extract ORs for each level using plot_comparison - the absolute risk of silicosis in the 
+# never water group much higher, therefore ORs subsequently lower - conditional on lowest group
+# most accurately seen using probability
+or_int_water <- comparisons(
+  model = lr_yrs_water,
+  variables = "all_yrs_cat2",
+  by = "water",
+  transform = "exp")
+or_int_water
+
+pred_int_water <- predictions(
+  model = lr_yrs_water,
+  newdata = datagrid(all_yrs_cat2 = unique(qxh_m_sil$all_yrs_cat2),
+                     water = unique(qxh_m_sil$water)),
+  type = "response"
+)
+pred_int_water
+
+# Filter if na in any row
+pred_int_water <- as.data.frame(pred_int_water) %>% 
+  filter(!is.na(estimate)) 
+
+
+# Plot the predicted probabilities of silicosis by all_yrs_cat2 and water in pred_int_water using ggplot
+fig_yrs_wat <- ggplot(pred_int_water, aes(x = all_yrs_cat2, y = estimate, ymin = conf.low, ymax = conf.high, colour = water)) +
+  geom_pointrange(position = position_dodge(width = 0.5)) + 
+  labs(x = "Years worked", y = "Predicted probability of silicosis", colour = "Water use") +
+  theme_pubr(base_size = 10) 
+fig_yrs_wat
+
+# Save the plot
+ggsave("fig_yrs_water_pred.jpg", fig_yrs_wat, width = 8, height = 4)
+
+                     
+# Plot the predicted probabilities of silicosis by all_yrs_cat2 and mask
+plot_model(lr_yrs_mask, type = "pred", terms = c("all_yrs_cat2", "mask"), 
+           title = "Predicted probability of silicosis by all_yrs_cat and mask") +
+  labs(x = "All years worked (categorical)", y = "Predicted probability of silicosis") +
+  theme_pubr(base_size = 10)
+
+# Predictions from the model in numbers
+pred_mask <- predictions(
+  model = lr_yrs_mask,
+  newdata = datagrid(mask = unique(qxh_m_sil$mask),
+                     all_yrs_cat2 = unique(qxh_m_sil$all_yrs_cat2)),
+  type = "response"
+)
+
+pred_mask <- pred_mask %>% filter(!is.na(all_yrs_cat2)) %>% 
+  arrange(mask, all_yrs_cat2) 
+pred_mask
+
+# Plot the predicted probabilities of silicosis by all_yrs_cat2 and dusty
+plot_model(lr_yrs_dusty, type = "pred", terms = c("all_yrs_cat2", "dusty"), 
+           title = "Predicted probability of silicosis by all_yrs_cat2 and dust") +
+  labs(x = "All years worked (categorical)", y = "Predicted probability of silicosis") +
+  theme_pubr(base_size = 10)
+
+# Summary of models using broom 
+models <- list(
+  "Basic" = lr_yrs,
+  "Ever smoker" = lr_yrs_smok, 
+  "Size group" = lr_yrs_size,
+  "Water use" = lr_yrs_water,
+  "Mask use" = lr_yrs_mask,
+  "Subjectively dusty" = lr_yrs_dusty,
+  "Final model" = fin_yrs, 
+  "Final model with interaction" = fin_yrs_int
+  )
+
+# Print coefs
+model_coefs <- map_dfr(models, tidy, .id = "model") %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2), 
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(model, term, OR, CI_lower, CI_upper, OR_CI, p.value) %>% 
+  filter(term != "(Intercept)") %>%
+  mutate(term = str_remove(term, "^all_yrs_cat2")) 
+
+print(model_coefs, n = Inf)
+
+# Print to csv
+write.csv(model_coefs, "tab_3.7_miner_model_coefs.csv", row.names = FALSE)
+
+# Make "No" reference of cann_comb
+qxh_m_sil$cann_comb <- relevel(as.factor(qxh_m_sil$cann_comb), ref = "No")
+
+# Sensitivity analysis
+# Make latency_cat2 with same groups as all_yrs_cat2
+lr_smok <- glm(silic_blnum ~ all_yrs_cat2 + dust_zone3 + smoking_comb + cann_comb, data = qxh_m_sil, family = binomial)
+lr_lat <- glm(silic_blnum ~ latency_cat + dust_zone3, data = qxh_m_sil, family = binomial)
+lr_yrs_11 <- glm(silic_11_num ~ all_yrs_cat2 + dust_zone3 , data = qxh_m_sil, family = binomial)
+lr_yrs_noatb <- glm(silic_blnum ~ all_yrs_cat2 + dust_zone3, data = subset(qxh_m_sil, tb_all == "No TB"), family = binomial)
+lr_yrs_ph <- glm(silic_ph_num ~ all_yrs_cat2 + dust_zone3, data = qxh_m_sil, family = binomial)
+lr_yrs_lat <- glm(silic_blnum ~ all_yrs_cat2 + dust_zone3, data = subset(qxh_m_sil, latency > 10), family = binomial)
+lr_yrs_qual <- glm(silic_blnum ~ all_yrs_cat2 + dust_zone3, data = subset(qxh_m_sil, quality != 3), family = binomial)
+
+# Summary of models with broom 
+sens_mods <- list(
+  "Basic" = lr_yrs,
+  "Smoking" = lr_smok,
+  "Exposure latency" = lr_lat,
+  "Outcome as ILO >= 1/1" = lr_yrs_11,
+  "Exclude active TB" = lr_yrs_noatb,
+  "Reader B silicosis" = lr_yrs_ph, 
+  "Latency > 10 years" = lr_yrs_lat,
+  "Acceptable quality" = lr_yrs_qual
+)
+
+# Print coefs 
+sens_coefs <- map_dfr(sens_mods, tidy, .id = "model") %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2), 
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(model, term, OR, CI_lower, CI_upper, OR_CI, p.value)
+print(sens_coefs, n = Inf)
+
+# Print to csv
+write.csv(sens_coefs, "tab_3.8_miner_sens_coefs.csv", row.names = FALSE)
+
+table(qxh_m_sil$silic_binlg, qxh_m_sil$all_yrs_cat2, useNA = "ifany")
+table(qxh_m_sil$silic_binlg_ph, qxh_m_sil$all_yrs_cat2, useNA = "ifany")
+table(qxh_m_sil$silic_binlg11, qxh_m_sil$latency, useNA = "ifany")
+table(qxh_m_sil$silic_binlg11, qxh_m_sil$all_yrs2, useNA = "ifany")
+
+qxh %>%
+  filter(cum_sil >= 3, cum_sil < 6) %>% 
+  filter(latency > 10) %>% # select 3 ≤ latency < 6
+  summarise(
+    n         = n(),                         # total rows
+    silicosis = sum(silic_blnum, na.rm = TRUE)  # total cases
+  )
+
+
+############################
+# Secondary outcome - RCS  #
+############################
+
+# Fit logistic regression model with restricted cubic splines for cumulative silicosis exposure
+# RCS for cum_sil with k knots
+k <- c(0.05, 0.35, 0.65, 0.95)
+k_sil <- quantile(qxh_m_sil$cum_sil, k, na.rm = TRUE)
+k_sil
+
+lr_rcs <- glm(
+  silic_blnum ~ rcs(cum_sil, k_sil),
+  data = qxh_m_sil,
+  family = binomial
+)
+summary(lr_rcs)
+
+# Plot of predicted probabilities of silicosis by cum_sil in lr_rcs 
+df <- data.frame(
+  cum_sil = seq(min(qxh_m_sil$cum_sil, na.rm = TRUE),
+                max(qxh_m_sil$cum_sil, na.rm = TRUE),
+                length.out = 100)
+)
+
+# Predict probabilities in simulated data 
+probs <- predict(lr_rcs, newdata = df, type = "response", se.fit = TRUE)
+
+# Extract predicted probabilities and standard errors to df
+pred_probs <- data.frame(
+  cum_sil = df$cum_sil,
+  prob = probs$fit,
+  se = probs$se.fit
+)
+
+# Plot predicted probabilities with confidence intervals
+fig3.6 <- ggplot(pred_probs, aes(x = cum_sil, y = prob)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = prob - 1.96 * se, ymax = prob + 1.96 * se), alpha = 0.2) +
+  labs(title = "Miners",
+       x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+       y = "Predicted probability of silicosis") +
+  theme_pubr()
+fig3.6
+
+# Save the plot
+ggsave("fig3.6_pred_prob_sil_miner.png", fig3.6, width = 8, height = 6)
+
+# Plot the odds  
+
+pred2 <- predict(lr_rcs, newdata = df, type = "link", se.fit = TRUE)
+
+# Add to newdata
+df$log_odds <- pred2$fit
+df$se <- pred2$se.fit
+df$odds <- exp(df$log_odds)
+df$lo_ci <- exp(df$log_odds - 1.96 * df$se)
+df$hi_ci <- exp(df$log_odds + 1.96 * df$se)
+ref_odds <- df$odds[4] 
+df$OR <- df$odds / ref_odds
+df$OR_low <- df$lo_ci / ref_odds
+df$OR_high <- df$hi_ci / ref_odds
+head(df)
+# Plot ORs
+fig3.7 <- ggplot(df, aes(x = cum_sil, y = OR)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = OR_low, ymax = OR_high), alpha = 0.2) +
+  labs(
+    title = "Odds Ratio of Silicosis",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Odds Ratio (reference = 4)"
+  ) +
+  theme_pubr()
+fig3.7
+# Save the odds ratio plot
+ggsave("fig3.7_odds_ratio_sil_miner.png", fig3.7, width = 8, height = 6)
+
+# Plot fig3.6 and fig 3.7 together 
+fig3.67 <- ggarrange(fig3.6, fig3.7, ncol = 2, nrow = 1, labels = c("A", "B"),
+                     common.legend = TRUE, legend = "bottom")
+fig3.67
+ggsave("fig3.67_pred_sil_miner_or.png", fig3.67, width = 10, height = 6)
+
+# Extract a table of OR, with reference 20, of OR and CI risks at 2, 5, 10, 15, 20,  30,  40, 50
+# Create a data frame with cumulative silicosis exposure at specific points
+# Define prediction points
+rcs_or <- data.frame(cum_sil = c(1, 2, 4, 5, 10, 20, 40, 60, 100))
+
+# Predict log odds and standard errors from the model
+pred_points <- predict(lr_rcs, newdata = rcs_or, type = "link", se.fit = TRUE)
+pred_points2 <- predict(lr_rcs, newdata = rcs_or, type = "response", se.fit = TRUE)
+
+# Convert predictions to a data frame
+pred_probs <- data.frame(
+  cum_sil = rcs_or$cum_sil,
+  prob    = round(pred_points2$fit,  2),
+  ci_high = round(pred_points2$fit + 1.96 * pred_points2$se.fit, 2),
+  ci_low  = round(pred_points2$fit - 1.96 * pred_points2$se.fit, 2)
+)
+pred_probs <- pred_probs %>%  
+  mutate(
+    pred_CI = paste0(prob, " (", ci_low, ", ", ci_high, ")")
+  ) %>%
+  select(cum_sil, pred_CI)
+
+# Add predictions to the data frame
+rcs_or$log_odds <- pred_points$fit
+rcs_or$se <- pred_points$se.fit
+
+# Convert to odds and calculate 95% CIs
+rcs_or$odds   <- exp(rcs_or$log_odds)
+rcs_or$lo_ci  <- exp(rcs_or$log_odds - (1.96 * rcs_or$se))
+rcs_or$hi_ci  <- exp(rcs_or$log_odds + (1.96 * rcs_or$se))
+
+# Set 4 as reference and calculate ORs
+ref_odds <- rcs_or$odds[rcs_or$cum_sil == 4]
+rcs_or$OR      <- rcs_or$odds / ref_odds
+rcs_or$OR_low  <- rcs_or$lo_ci / ref_odds
+rcs_or$OR_high <- rcs_or$hi_ci / ref_odds
+
+# Select and round output
+rcs_or <- rcs_or %>%
+  select(cum_sil, OR, OR_low, OR_high) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+# Show final table
+rcs_or <- rcs_or %>% 
+  mutate(
+    OR_CI = paste0(OR, " (", OR_low, ", ", OR_high, ")")
+  ) %>%
+  select(cum_sil, OR_CI)
+pred_probs
+# Join rcs_or and pred_probs to get a single table join on cum_sil
+pred_or_rcs <- rcs_or %>%
+  left_join(pred_probs, by = "cum_sil") 
+pred_or_rcs
+# Filter rows cum_sil = 2, 4, 10, 20, 40, 60
+pred_or_rcs <- pred_or_rcs %>%
+  filter(cum_sil %in% c(2, 4, 10, 20, 40, 60, 100))
+pred_or_rcs
+
+# Save the table to CSV
+write.csv(pred_or_rcs, "tab_3.9_miner_predprob_silrcs.csv", row.names = FALSE)
+
+# Plot predicted probabilities by cum_sil only
+fig3.6b <- plot_predictions(
+  model = lr_rcs,
+  condition = "cum_sil",
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig3.6b <- fig3.6b +
+  labs(
+    title = "Predicted Probability of Silicosis",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of silicosis"
+  ) +
+  theme_pubr()
+
+fig3.6b
+# Not to save - just evidence of alternative methodolgy/code for same output
+
+# Predict probabilities at specific values of cum_sil
+pred <- marginaleffects::predictions(
+  lr_rcs,
+  newdata = datagrid(
+    cum_sil = c(1, 2, 4, 5, 10, 20, 40, 60)
+  ),
+  type = "response"
+)
+
+# Convert and format
+pred_df <- as.data.frame(pred)
+
+pred_df <- pred_df %>%
+  select(cum_sil, estimate, conf.low, conf.high) %>%
+  mutate(
+    across(where(is.numeric), ~ round(.x * 100, 1)),
+    cum_sil = cum_sil / 100,
+    Estimate_CI = paste0(estimate, " (95% CI ", conf.low, ", ", conf.high, ")")
+  )
+
+# Save table
+write.csv(pred_df, "tab_3.9_miner_predprob_sil.csv", row.names = FALSE)
+
+# View
+pred_df
+
+# Create prediction grid including baseline
+pred <- marginaleffects::predictions(
+  lr_rcs,
+  newdata = datagrid(
+    cum_sil = c(1, 2, 4, 5, 10, 20, 40, 60)
+  ),
+  type = "link"  # log-odds
+)
+
+# Define baseline exposure
+baseline <- 4
+
+# Convert to data frame
+pred_df <- as.data.frame(pred)
+
+# Calculate ORs relative to baseline
+baseline_logodds <- pred_df$estimate[pred_df$cum_sil == baseline]
+
+pred_df <- pred_df %>%
+  mutate(
+    OR        = exp(estimate - baseline_logodds),
+    CI_lower  = exp(conf.low - baseline_logodds),
+    CI_upper  = exp(conf.high - baseline_logodds),
+    OR_CI     = paste0(round(OR, 2), " (95% CI ", round(CI_lower, 2), ", ", round(CI_upper, 2), ")"),
+  ) %>%
+  select(cum_sil, OR, CI_lower, CI_upper, OR_CI)
+
+# Save to CSV
+write.csv(pred_df, "tab_3.10_miner_silrcs_OR.csv", row.names = FALSE)
+
+# View
+pred_df
+
+# Fit logistic regression model with restricted cubic splines for cumulative silicosis exposure 
+# among subset population with latency > 10 years
+# RCS for cum_sil with k knots
+k <- c(0.05, 0.35, 0.65, 0.95)
+k_sil <- quantile(qxh_m_sil$cum_sil, k, na.rm = TRUE)
+k_sil
+
+lr_rcs_lat <- glm(
+  silic_blnum ~ rcs(cum_sil, k_sil) ,
+  data = (subset(qxh_m_sil, latency >= 10)),
+  family = binomial
+)
+
+# Plot predicted probabilities by cum_sil only
+fig3.8 <- plot_predictions(
+  model = lr_rcs_lat,
+  condition = "cum_sil",
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig_3.8 <- fig3.8 +
+  labs(
+    title = "Miners (>= 10 years latency)",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of silicosis"
+  ) +
+  theme_pubr()
+
+fig_3.8
+# Save the plot
+ggsave("fig3.8_pred_prob_sil_miner_lat.png", fig_3.8, width = 8, height = 6)
+
+# Create prediction grid including baseline
+pred <- marginaleffects::predictions(
+  lr_rcs_lat,
+  newdata = datagrid(
+    cum_sil = c(1, 2, 4, 5, 10, 20, 40, 60)
+  ),
+  type = "link"  # log-odds
+)
+
+# Define baseline exposure
+baseline <- 4
+
+# Convert to data frame
+pred_df <- as.data.frame(pred)
+
+# Calculate ORs relative to baseline
+baseline_logodds <- pred_df$estimate[pred_df$cum_sil == baseline]
+
+pred_df <- pred_df %>%
+  mutate(
+    OR        = exp(estimate - baseline_logodds),
+    CI_lower  = exp(conf.low - baseline_logodds),
+    CI_upper  = exp(conf.high - baseline_logodds),
+    OR_CI     = paste0(round(OR, 2), " (95% CI ", round(CI_lower, 2), ", ", round(CI_upper, 2), ")"),
+  ) %>%
+  select(cum_sil, OR, CI_lower, CI_upper, OR_CI)
+
+# View
+pred_df
+
+Hmisc::describe(qxh_m_sil$cum_sil)
+# Interaction of water suppression with cumulative silicosis exposure
+lr_rcs_water <- glm(
+  silic_blnum ~ ((rcs(cum_sil, k_sil))*water + size_grp) ,
+  data = qxh_m_sil,
+  family = binomial
+)
+
+summary(lr_rcs_water)
+
+# Confounded water suppression with cumulative silicosis exposure
+lr_rcs_water2 <- glm(
+  silic_blnum ~ ((rcs(cum_sil, k_sil)) + water + size_grp) ,
+  data = qxh_m_sil,
+  family = binomial
+)
+
+lrtest(lr_rcs_water, lr_rcs_water2)
+
+# Summarise coefficients with tidy
+water_rcs2_coef <- tidy(lr_rcs_water2) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, ", ", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+water_rcs2_coef
+
+# Plot predicted probabilities by cum_sil only
+water <- plot_predictions(
+  model = lr_rcs_water,
+  condition = list("cum_sil", "water"),
+  type = "response",
+  transform = NULL
+) +
+  labs(
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of silicosis",
+    color = "Water use"
+  ) +
+  guides(fill = "none") +
+  theme_pubr(base_size = 11)
+water
+# Save the plot
+ggsave("fig_water_bts.png", water, width = 10, height = 6)
+
+table(qxh_m_sil$water, qxh_m_sil$size_grp, useNA = "ifany")
+
+# At cum_sil exposures of 0, 20, 40, 60, 80 show predicted probabilities of silicosis by water suppression
+water_risk <- marginaleffects::predictions(
+  lr_rcs_water,
+  newdata = datagrid(
+    cum_sil = c(0, 20, 40, 60, 80, 100),
+    water = unique(qxh_m_sil$water)
+  ),
+  type = "response"
+)
+water_risk <- as.data.frame(water_risk)
+water_risk <- water_risk %>%
+  select(cum_sil, water, estimate, conf.low, conf.high) %>%
+  mutate(
+    across(where(is.numeric), ~ round(.x * 100, 1)),
+    cum_sil = cum_sil / 100,
+    Estimate_CI = paste0(estimate, " (95% CI ", conf.low, ", ", conf.high, ")")
+  ) %>% 
+  select(cum_sil, water, Estimate_CI)
+water_risk
+# Order df by water, Never, Rarely, Often, Always 
+water_risk <- water_risk %>%
+  mutate(water = factor(water, levels = c("Never", "Rarely", "Often", "Always"))) %>%
+  arrange(water)
+
+# Save as csv
+write.csv(water_risk, "tab_3.11_miner_silrcs_water.csv", row.names = FALSE)
+
+# Interaction of mask with cumulative silicosis exposure
+lr_rcs_mask <- glm(
+  silic_blnum ~ (rcs(cum_sil, k_sil) * mask + water) ,
+  data = qxh_m_sil,
+  family = binomial
+)
+
+# Plot predicted probabilities by cum_sil only if mask = "Never"
+plot_predictions(
+  model = lr_rcs_mask,
+  condition = c("cum_sil", "mask", "water" = unique),
+  type = "response",  # predicted probabilities
+  transform = NULL
+) + 
+  labs(
+    title = "Predicted Probability of Silicosis by Cumulative Silicosis Exposure and Mask Use",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of silicosis"
+  ) +
+  scale_x_continuous(limits = c(0, 100))+
+  theme_pubr()
+
+# Interaction of dusty with cumulative silicosis exposure
+lr_rcs_dusty <- glm(
+  silic_blnum ~ (rcs(cum_sil, k_sil)) * dusty_bin + water + mask,
+  data = qxh_m_sil,
+  family = binomial
+)
+
+# Plot predictions 
+plot_predictions(
+  model = lr_rcs_dusty,
+  condition = c("cum_sil", "dusty_bin"),
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+table(qxh_m_sil$mask, useNA = "ifany")
+
+#############################
+# Modelling primary outcome  - EXMINERS#
+#############################
+
+
+# Decision whether to include age as a covariate
+# pcor is 0.6 - moderate correlation 
+# Mainly adjusting for time period of work
+# but there is wide variability in age of first working - therefore not approp to use for adjustment for period of work 
+# It may also introduce some latency effect, but this is perhaps not the best way to look at this - can measure latency directly 
+# Or censor by > 10 years latency 
+# Therefore not using age
+table(qxh_imp_m$ers_gp, useNA = "ifany")
+# filter only miners from qxh_x_sil 
+qxh_x_sil <- qxh_imp_m %>%
+  filter(ers_gp %in% c("Ex-miner"))
+
+cor(qxh_x_sil$age, qxh_x_sil$all_yrs, use = "pairwise.complete.obs")
+
+# Now with restricted cubic spline instead of NS - possible in GLM 
+
+# Create spline basis for age (3 degrees of freedom = 4 knots) - for glmer as RCS not possible
+# qxh_x_sil <- qxh_x_sil %>% mutate(
+#ns_age_1 = ns(age, df = 3)[, 1],
+#ns_age_2 = ns(age, df = 3)[, 2],
+#ns_age_3 = ns(age, df = 3)[, 3])
+
+# In size_grp replace NA with "Unknown" use replace_na for clustering
+qxh_x_sil$size_grp <- as.character(qxh_x_sil$size_grp)
+qxh_x_sil$size_grp[is.na(qxh_x_sil$size_grp)] <- "Unknown"
+table(qxh_x_sil$size_grp, useNA = "ifany")
+qxh_x_sil$size_grp <- factor(
+  qxh_x_sil$size_grp,
+  levels = c("0-25", "26-100", ">100", "Unknown")
+)
+table(qxh_x_sil$dust_zone3, useNA = "ifany")
+# Fit logistic regression model no clustering by size_grp
+lr_yrs <- glm(
+  silic_blnum ~ all_yrs_cat2 + dust_zone3,
+  data = qxh_x_sil,
+  family = binomial
+)
+summary(lr_yrs)
+
+# Summarise coefficients with tidy
+lr_mod_sum <- tidy(lr_yrs) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+lr_mod_sum
+lr_mod_sum
+lr_mod_sum <- lr_mod_sum %>%
+  select(term, OR_CI) %>%
+  mutate(term = str_remove(term, "^all_yrs_cat2")) %>% 
+  filter(term != "(Intercept)")
+lr_mod_sum
+# Save summary of logistic regression model to csv
+write.csv(lr_mod_sum, "tab3.7_exminers_lr_yrs.csv", row.names = FALSE)
+
+# Predictions for logistic regression model
+pred_yrs <- predictions(
+  model = lr_yrs,
+  newdata = datagrid(all_yrs_cat2 = unique(qxh_m_sil$all_yrs_cat2)),
+  type = "response"
+)
+pred_yrs
+
+# Write to df, round to 2 dp and make into Estimate (2.5 %, 97.5 %)
+pred_yrs_df <- as.data.frame(pred_yrs) %>%
+  mutate(
+    Estimate = round(estimate, 2),
+    `2.5 %` = round(conf.low, 2),
+    `97.5 %` = round(conf.high, 2)
+  ) %>%
+  select(all_yrs_cat2, Estimate, `2.5 %`, `97.5 %`)
+# Combine Estimate and CI into a single column
+pred_yrs_df <- pred_yrs_df %>%
+  mutate(
+    Estimate_CI = paste0(Estimate, " (", `2.5 %`, ", ", `97.5 %`, ")")
+  ) %>%
+  select(all_yrs_cat2, Estimate_CI)
+pred_yrs_df
+
+# Fit mixed effects logistic regression cluster intercept on size_grp
+qxh_x_sil$tb_pmh_join <- relevel(as.factor(qxh_x_sil$tb_pmh_join), ref = "No")
+qxh_x_sil$ever_smok_comb <- relevel(as.factor(qxh_x_sil$ever_smok_comb), ref = "No")
+#k <- c(0.05, 0.35, 0.65, 0.95)
+#k_age <- quantile(qxh_x_sil$age, k, na.rm = TRUE)
+
+# In tb_pmh_join, replace "Unknown" with NA 
+#lr_yrs_d <- glm(silic_blnum ~ all_yrs_cat2 + dust_zone3, data = qxh_x_sil, family = binomial)
+lr_yrs_dl <- glm(silic_blnum ~ all_yrs_cat2, data = subset(qxh_x_sil, dust_zone3 == "Low"), family = binomial)
+lr_yrs_dh <- glm(silic_blnum ~ all_yrs_cat2, data = subset(qxh_x_sil, dust_zone3 == "High"), family = binomial)
+lr_yrs_ptb <- glm(silic_blnum ~ all_yrs_cat2*tb_pmh_join, qxh_x_sil, family = binomial)
+lr_yrs_ytb <- glm(silic_blnum ~ all_yrs_cat2, subset(qxh_x_sil, tb_pmh_join == "Yes"), family = binomial)
+lr_yrs_nptb <- glm(silic_blnum ~ all_yrs_cat2, subset(qxh_x_sil, tb_pmh_join == "No"), family = binomial)
+lr_yrs_smok <- glm(silic_blnum ~ all_yrs_cat2*ever_smok_comb, qxh_x_sil, family = binomial)
+lr_yrs_smok2 <- glm(silic_blnum ~ all_yrs_cat2 + smoking_comb, qxh_x_sil, family = binomial)
+
+#lrtest(lr_yrs_d, lr_yrs) # p = 0.50
+lrtest(lr_yrs_ptb, lr_yrs) # v strong - expected
+lrtest(lr_yrs_smok, lr_yrs) # p = 0.68
+lrtest(lr_yrs_smok2, lr_yrs) # p = 0.68
+
+# Summary of models using broom 
+models <- list(
+  "Basic" = lr_yrs,
+  "Dust zone" = lr_yrs_d,
+  "Low dust" = lr_yrs_dl,
+  "High dust" = lr_yrs_dh,
+  "Interaction prev TB" = lr_yrs_ptb,
+  "Previous TB" = lr_yrs_ytb,
+  "No previous TB" = lr_yrs_nptb,
+  "Interaction smok" = lr_yrs_smok, 
+  "Confound smok" = lr_yrs_smok2)
+
+# Print coefs
+model_coefs <- map_dfr(models, tidy, .id = "model") %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2), 
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(model, term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+print(model_coefs, n = Inf)
+
+# Print to csv
+write.csv(model_coefs, "tab_3.11_x_model_coefs.csv", row.names = FALSE)
+
+# Sensitivity analysis
+lr_lat <- glm(silic_blnum ~ latency_cat, data = qxh_x_sil, family = binomial)
+lr_yrs_11 <- glm(silic_11_num ~ all_yrs_cat2 , data = qxh_x_sil, family = binomial)
+lr_yrs_noatb <- glm(silic_blnum ~ all_yrs_cat2, data = subset(qxh_x_sil, tb_all == "No TB"), family = binomial)
+lr_yrs_ph <- glm(silic_ph_num ~ all_yrs_cat2, data = qxh_x_sil, family = binomial)
+lr_yrs_lat <- glm(silic_blnum ~ all_yrs_cat2, data = subset(qxh_x_sil, latency > 10), family = binomial)
+lr_yrs_qual <- glm(silic_blnum ~ all_yrs_cat2, data = subset(qxh_x_sil, quality != 3), family = binomial)
+
+# Summary of models with broom 
+sens_mods <- list(
+  "Basic" = lr_yrs,
+  "Exposure latency" = lr_lat,
+  "Outcome as ILO >= 1/1" = lr_yrs_11,
+  "Exclude active TB" = lr_yrs_noatb,
+  "Reader B silicosis" = lr_yrs_ph, 
+  "Latency > 10 years" = lr_yrs_lat,
+  "Quality" = lr_yrs_qual
+)
+
+# Print coefs 
+sens_coefs <- map_dfr(sens_mods, tidy, .id = "model") %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2), 
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(model, term, OR, CI_lower, CI_upper, OR_CI, p.value)
+print(sens_coefs, n = Inf)
+# Print to csv
+write.csv(sens_coefs, "tab_3.12_x_sens_coefs.csv", row.names = FALSE)
+
+############################
+# Secondary outcome - RCS - EX MINERS #
+############################
+
+# Fit logistic regression model with restricted cubic splines for cumulative silicosis exposure
+# RCS for cum_sil with k knots
+k <- c(0.1, 0.5, 0.9)
+k_sil <- quantile(qxh_x_sil$cum_sil, k, na.rm = TRUE)
+k_sil
+lr_rcs <- glm(
+  silic_blnum ~ rcs(cum_sil, k_sil) ,
+  data = qxh_x_sil,
+  family = binomial
+)
+
+# Plot of predicted probabilities of silicosis by cum_sil in lr_rcs 
+df <- data.frame(
+  cum_sil = seq(min(qxh_x_sil$cum_sil, na.rm = TRUE),
+                max(qxh_x_sil$cum_sil, na.rm = TRUE),
+                length.out = 100)
+)
+
+# Predict probabilities in simulated data 
+probs <- predict(lr_rcs, newdata = df, type = "response", se.fit = TRUE)
+
+# Extract predicted probabilities and standard errors to df
+pred_probs <- data.frame(
+  cum_sil = df$cum_sil,
+  prob = probs$fit,
+  se = probs$se.fit
+)
+
+# Plot predicted probabilities with confidence intervals
+fig3.9 <- ggplot(pred_probs, aes(x = cum_sil, y = prob)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = prob - 1.96 * se, ymax = prob + 1.96 * se), alpha = 0.2) +
+  labs(title = "Ex-miners",
+       x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+       y = "Predicted probability of silicosis") +
+  theme_pubr() +
+  scale_x_continuous(limits = c(0, 100)) 
+fig3.9
+# Save the plot
+ggsave("fig3.9_pred_prob_sil_exminer.png", fig3.9, width = 8, height = 6)
+
+# Plot fig3.6 and fig 3.7 together 
+fig3.69 <- ggarrange(fig3.6, fig3.9, ncol = 2, nrow = 1, labels = c("A", "B"),
+                     common.legend = TRUE, legend = "bottom")
+fig3.69
+ggsave("fig3.69_pred_sil_miner_x.png", fig3.69, width = 10, height = 6)
+
+# Plot the odds  
+pred2 <- predict(lr_rcs, newdata = df, type = "link", se.fit = TRUE)
+
+# Add to newdata
+df$log_odds <- pred2$fit
+df$se <- pred2$se.fit
+df$odds <- exp(df$log_odds)
+df$lo_ci <- exp(df$log_odds - 1.96 * df$se)
+df$hi_ci <- exp(df$log_odds + 1.96 * df$se)
+ref_odds <- df$odds[4] 
+df$OR <- df$odds / ref_odds
+df$OR_low <- df$lo_ci / ref_odds
+df$OR_high <- df$hi_ci / ref_odds
+head(df)
+# Plot ORs
+fig3.10 <- ggplot(df, aes(x = cum_sil, y = OR)) +
+  geom_line(color = "blue") +
+  geom_ribbon(aes(ymin = OR_low, ymax = OR_high), alpha = 0.2) +
+  labs(
+    title = "Odds Ratio of Silicosis",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Odds Ratio (ref = 4)"
+  ) +
+  theme_pubr()
+fig3.10
+
+# Save the odds ratio plot
+ggsave("fig3.10_odds_ratio_sil_exminer.png", fig3.10, width = 8, height = 6)
+
+# Extract a table of OR, with reference 20, of OR and CI risks at 2, 5, 10, 15, 20,  30,  40, 50
+# Create a data frame with cumulative silicosis exposure at specific points
+# Define prediction points
+rcs_or <- data.frame(cum_sil = c(1, 2, 4, 5, 10, 20, 40, 60))
+
+# Predict log odds and standard errors from the model
+pred_points <- predict(lr_rcs, newdata = rcs_or, type = "link", se.fit = TRUE)
+
+# Add predictions to the data frame
+rcs_or$log_odds <- pred_points$fit
+rcs_or$se <- pred_points$se.fit
+
+# Convert to odds and calculate 95% CIs
+rcs_or$odds   <- exp(rcs_or$log_odds)
+rcs_or$lo_ci  <- exp(rcs_or$log_odds - 1.96 * rcs_or$se)
+rcs_or$hi_ci  <- exp(rcs_or$log_odds + 1.96 * rcs_or$se)
+
+# Set 4 as reference and calculate ORs
+ref_odds <- rcs_or$odds[rcs_or$cum_sil == 4]
+rcs_or$OR      <- rcs_or$odds / ref_odds
+rcs_or$OR_low  <- rcs_or$lo_ci / ref_odds
+rcs_or$OR_high <- rcs_or$hi_ci / ref_odds
+
+# Select and round output
+rcs_or <- rcs_or %>%
+  select(cum_sil, OR, OR_low, OR_high) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+# Show final table
+rcs_or
+
+# Plot predicted probabilities by cum_sil only
+fig3.7 <- plot_predictions(
+  model = lr_rcs,
+  condition = "cum_sil",
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig_3.7 <- fig3.7 +
+  labs(
+    title = "Predicted Probability of Silicosis",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of silicosis"
+  ) +
+  theme_pubr()
+
+fig_3.7
+
+
+# Not to save - just evidence of alternative methodolgy/code for same output
+
+# Predict probabilities at specific values of cum_sil
+pred <- marginaleffects::predictions(
+  lr_rcs,
+  newdata = datagrid(
+    cum_sil = c(2, 4, 10, 20, 40, 60, 100)
+  ),
+  type = "response"
+)
+
+# Convert and format
+pred_df <- as.data.frame(pred)
+
+predict_df <- pred_df %>%
+  select(cum_sil, estimate, conf.low, conf.high) %>%
+  mutate(
+    across(where(is.numeric), ~ round(., 2)),
+    Estimate_CI = paste0(estimate, " (", conf.low, ", ", conf.high, ")")
+  )
+predict_df
+# Save table
+write.csv(predict_df, "tab_3.13_x_predprob_sil.csv", row.names = FALSE)
+
+
+# Create prediction grid including baseline
+pred <- marginaleffects::predictions(
+  lr_rcs,
+  newdata = datagrid(
+    cum_sil = c(2, 4, 10, 20, 40, 60, 100)
+  ),
+  type = "link"  # log-odds
+)
+
+# Define baseline exposure
+baseline <- 4
+
+# Convert to data frame
+pred_df <- as.data.frame(pred)
+
+# Calculate ORs relative to baseline
+baseline_logodds <- pred_df$estimate[pred_df$cum_sil == baseline]
+
+pred_df_or <- pred_df %>%
+  mutate(
+    OR        = exp(estimate - baseline_logodds),
+    CI_lower  = exp(conf.low - baseline_logodds),
+    CI_upper  = exp(conf.high - baseline_logodds),
+    OR_CI     = paste0(round(OR, 2), " (", round(CI_lower, 2), ", ", round(CI_upper, 2), ")"),
+  ) %>%
+  select(cum_sil, OR, CI_lower, CI_upper, OR_CI)
+pred_df_or
+# Save to CSV
+write.csv(pred_df_or, "tab_3.14_x_silrcs_OR.csv", row.names = FALSE)
+
+# Left join pred_df and pred_df_or with cum_sil, select cum_sil, Estimate_CI, OR_CI
+pred_df_combined <- pred_df_or %>%
+  left_join(predict_df, by = "cum_sil") %>%
+  select(cum_sil, Estimate_CI, OR_CI) %>% 
+  filter(cum_sil %in% c(2, 4, 10, 20, 40, 60, 100))
+pred_df_combined
+write.csv(pred_df_combined, "tab_3.14_x_pred_or_comb.csv", row.names = FALSE)
+
+# Fit logistic regression model with restricted cubic splines for cumulative silicosis exposure 
+# among subset population with latency > 10 years
+# RCS for cum_sil with k knots
+k <- c(0.05, 0.35, 0.65, 0.95)
+k_sil <- quantile(qxh_x_sil$cum_sil, k, na.rm = TRUE)
+
+lr_rcsx_lat <- glm(
+  silic_blnum ~ rcs(cum_sil, k_sil) ,
+  data = (subset(qxh_x_sil, latency >= 10)),
+  family = binomial
+)
+
+# Plot predicted probabilities by cum_sil only
+fig3.11 <- plot_predictions(
+  model = lr_rcsx_lat,
+  condition = "cum_sil",
+  type = "response",  # predicted probabilities
+  transform = NULL
+)
+
+fig_3.11 <- fig3.11 +
+  labs(
+    title = "Ex-miners (>= 10 years latency)",
+    x = expression("Cumulative RCS (mg/m"^3*"-yrs)"),
+    y = "Predicted probability of silicosis"
+  ) +
+  theme_pubr()
+
+fig_3.11
+# Save the plot
+ggsave("fig3.11_pred_prob_sil_exminer_lat.png", fig_3.11, width = 8, height = 6)
+
+# ggarrange fig_3.8 and fig_3.11
+fig3.811 <- ggarrange(fig_3.8, fig_3.11, ncol = 2, nrow = 1, labels = c("A", "B"),
+                     common.legend = TRUE, legend = "bottom")
+
+fig3.811
+ggsave("fig3.811_pred_prob_sil_miner_x_lat.png", fig3.811, width = 10, height = 6)
+
+#######################################
+# Silicosis among community members #
+#######################################
+
+# Create a population of community members
+qxh_comm <- qxh %>%
+  filter(group == "Community" & cxr_done == "Performed" & quality != "unreadable")
+qxh_comm2 <- qxh %>%
+  filter(group == "Community")
+# Prevalence of silicosis 
+comm_prev <- mean(qxh_comm$silic_blnum, na.rm = TRUE) *100
+# 8.5%
+table(qxh_comm$job_cat, useNA = "ifany")
+# Fishers exact confidence intervals 95% for 6/77 
+binom.test(6, 75, conf.level = 0.95)
+
+
+# 6/77 (7.8%) of panning tailing had silicosis 
+# 1 food and drink seller - prob false pos (cat 0)
+
+# Confirm no reported exminers
+table(qxh_comm2$hiv_statusx)
+table(qxh_comm2$job_cat, qxh_comm2$hiv_statusx, qxh_comm2$sex, useNA = "ifany")
+table(qxh_comm2$group, qxh_comm2$comb_hiv, qxh_comm2$sex, useNA = "ifany")
+
+# For participants who listed job = 9, what did they write for vlaue job other and what was silic_blnum result use filter/tidyverse
+x <- qxh_comm %>%
+  filter(job == 9 | job == 3) %>%
+  select(job_cat, silic_blnum, job_other, maj_cat, large)
+# All were brokers ? ex-mienrs 3 with dx - 1 maj cat 2, 1 with large B 
+x # 2 others with silicosis were brokers
+
+# Of 6 panners. 2 within 2 years (1 maj 3; aged >60) staring paning tailin, 4 within 20 years
+# Further maj_cat 2 aged <30; 
+table(qxh_comm$silic_blnum, qxh_comm$tail_cat, qxh_comm$maj_cat, useNA = "ifany")
+
+table(qxh_comm$silic_blnum, qxh_comm$age_cat, useNA = "ifany")
+table(qxh_comm$maj_cat, qxh_comm$large, useNA = "ifany")
+
+# Simple table of characteristics of community members by silicosis status 
+tab_3.15 <- tableby( silic_binlg ~ age_cat + sex + job_simp + tb_pmh_join + comb_hiv + ever_smok_comb + tail_cat + maj_cat + large,, 
+                 data = qxh_comm,
+                 control = my_controls)
+summ_tab_3.15 <- summary(tab_3.15,
+                      digits=1, digits.pct=1)
+write2word(summ_tab_3.15, "tab_3.15_comm_silrf.docx")
+
+
+#######################################
+# Is TB a risk factors for silicosis? #
+#######################################
+
+# Table of premine 
+my_controls <- tableby.control(
+  total       = TRUE,
+  test        = FALSE,
+  numeric.stats = c("medianq1q3", "Nmiss2"),
+  cat.stats     = c("countrowpct", "Nmiss2"),
+  stats.labels  = list(
+    medianq1q3   = "Median (Q1, Q3)",
+    countrowpct  = "N (%) (Row)",
+    Nmiss2       = "Missing"
+  )
+)
+table(qxh_sil$silic_blnum, qxh_sil$tb_period, useNA = "ifany")
+tab_prevtb <- tableby(silic_blnum ~ tb_period, data = qxh_sil,
+                      control = my_controls)
+summ_tab_prevtb <- summary(tab_prevtb,
+                           digits=1, digits.pct=1)
+summ_tab_prevtb
+write2word(summ_tab_prevtb, "tab3.15_prevtb_silicosis.docx")
+
+
+# Fit logistic regression model for TB as a risk factor for silicosis
+k <- c(0.25, 0.5, 0.75)
+k_sil <- quantile(qxh$cum_sil, k, na.rm = TRUE)
+table(qxh_imp_m$silic_blnum,qxh_imp_m$tb_period, useNA = "ifany")
+lr_tb <- glm(silic_blnum ~ all_yrs_cat3 + tb_period + dust_zone3 + water + size_grp, data =qxh_imp_m, family = binomial)
+lr_tb_raw <- glm(silic_blnum ~ all_yrs_cat3 + tb_period, data =qxh_sil, family = binomial)
+lr_tb_wat <- glm(silic_blnum ~ rcs(cum_sil, k_sil) + tb_period + water + size_grp, data = qxh_sil, family = binomial)
+lr_rcs_tb <- glm(silic_blnum ~ rcs(cum_sil, k_sil) + tb_period + water + size_grp, data = qxh_imp_m, family = binomial)
+table(qxh_imp_m$water, useNA = "ifany")
+# list of period_mods
+period_mods <- list(
+  "TB period" = lr_tb,
+  "No imputation" = lr_tb_raw,
+  "Water" = lr_tb_wat,
+  "RCS" = lr_rcs_tb
+)
+
+summary(lr_tb)
+
+# Plot predicted probabilities by cum_sil only
+fig3.13 <- plot_predictions(
+  model     = lr_tb,
+  condition = c("all_yrs_cat3", "tb_period"),
+  type      = "response",  # predicted probabilities
+  transform = NULL
+) +
+  labs(
+    y = "Probability of silicosis",
+    x = ""
+  ) +
+  scale_color_discrete(
+    name   = "Previous TB",
+    labels = c("No TB", "TB post-mine", "TB pre-mine")
+  ) +
+  theme_pubr()
+fig3.13
+
+# Save the plot
+ggsave("fig3.13_tb_silicosis_prob.png", fig3.13, width = 8, height = 6)
+
+# Summarise coefficients with tidy
+period_coefs <- map_dfr(period_mods, tidy, .id = "model") %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(model, term, OR, CI_lower, CI_upper, OR_CI, p.value)
+
+# Print coefficients
+print(period_coefs, n = Inf)
+
+lr_tb_sum <- tidy(lr_tb) %>%
+  mutate(
+    OR       = round(exp(estimate), 1),
+    CI_lower = round(exp(estimate - 1.96 * std.error), 1),
+    CI_upper = round(exp(estimate + 1.96 * std.error), 1),
+    p.value  = round(p.value, 2),
+    OR_CI    = paste0(OR, " (", CI_lower, "-", CI_upper, ")")
+  ) %>%
+  select(term, OR, CI_lower, CI_upper, OR_CI, p.value)
+lr_tb_sum
+
+# list tbyr_ago if tb_period is "tb_premine"
+table(qxh_imp_m$tb_period, useNA = "ifany")
+tb_premine <- qxh_sil %>%
+  filter(tb_period == "TB before mining") %>%
+  arrange(desc(tbyr_ago))
+summary(tb_premine$tbyr_ago)
+tb_premine$tbyr_check <- tb_premine$age - tb_premine$tbyr_ago
+summary(tb_premine$tbyr_check) 
+
+# What is maj_cat of participants with tb_premine
+table(tb_premine$profusion, tb_premine$large, useNA = "ifany")
+table(tb_premine$maj_cat, tb_premine$large, useNA = "ifany")
+
+table(tb_premine$maj_cat,tb_premine$ptld, useNA = "ifany")
+table(tb_premine$maj_cat,tb_premine$ptld_ph, useNA = "ifany")
+
+
+table(qxh_imp_m$silic_blnum, qxh_imp_m$cum_sil_cat, qxh_imp_m$water, useNA = "ifany")
+table(qxh_imp_m$silic_blnum, qxh_imp_m$all_yrs_cat2, qxh_imp_m$water, useNA = "ifany")
+table(qxh_imp_m$silic_binlg_ph, qxh_imp_m$ers_gp, useNA = "ifany")
