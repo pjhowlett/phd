@@ -1,0 +1,270 @@
+# Geomapping 
+
+# Load the required libraries
+library(tidyverse)
+library(ggplot2)
+library(ggmap)
+library(maps)
+require(measurements)
+library(Hmisc)
+require(sp)
+require(leaflet)
+require(readxl)
+require(geodist)
+require(sf)
+
+# Set the working directory
+setwd("~/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/Sampling_frame")
+
+# Load the data
+geomapping <- read_excel("geomapping.xlsx")
+dim(geomapping)
+
+# Quick view
+glimpse(geomapping)
+
+# Change the name and create factor of levels for num_miners 
+
+table(geomapping$num_miners)
+
+geomapping <- geomapping %>%
+  mutate(num_miners = recode(num_miners,
+                             "Chini ya 10" = "1-10",
+                             "Kati ya 11 na 25" = "11-25",
+                             "Kati ya 26 na 50" = "26-50",
+                             "Kati ya 51 na 75" = "51-75",
+                             "Kati ya 76 na 100" = "76-100",
+                             "Kati ya 101 na 150" = "101-150",
+                             "Kati ya 151 na 200" = "151-200",
+                             "Zaidi ya 200" = ">200"))
+
+geomapping$num_miners <- factor(geomapping$num_miners, 
+                                levels = c("1-10", "11-25", "26-50", "51-75", "76-100", "101-150", "151-200", ">200"))
+table(geomapping$num_miners)
+# Barchart of num_miners
+geomapping %>%
+  ggplot(aes(x = num_miners)) +
+  geom_bar() +
+  labs(title = "Number of miners per mine",
+       x = "Number of miners",
+       y = "Frequency")
+
+# Find the mid-point of values
+geomapping <- geomapping %>%
+  mutate(value_miners = recode(num_miners,
+                             "1-10" = 5,
+                             "11-25" = 18,
+                             "26-50" = 38,
+                             "51-75" = 63,
+                             "76-100" = 88,
+                             "101-150" = 125,
+                             "151-200" = 175,
+                             ">200" = 275))
+
+x <- table(geomapping$value_miners)
+x <- data.frame(x)
+x$Var1 <- as.numeric(as.character(x$Var1))
+x$sum <- x$Var1 * x$Freq
+
+# About 6000 miners in block B and D 
+
+# Equal split of sizes between block B and D
+geomapping %>%
+  ggplot(aes(x = num_miners, fill = block)) +
+  geom_bar() +
+  labs(title = "Number of miners per mine",
+       x = "Number of miners",
+       y = "Frequency")
+
+# Create a new column for small or large mine, based on whether value_mine is above or below 50 
+
+geomapping <- geomapping %>%
+  mutate(mine_size = ifelse(value_miners > 50, "Large", "Small"))
+
+# Cross table of size and block, then proportions of each strata
+
+tab <- table(geomapping$mine_size, geomapping$block)
+sum <- tab/sum(tab)
+nos <- round(sum*22,0)
+nos
+# Randomly sample 21 mines, stratified by mine size and block, then give each mine, randomly, a value of 1 to 5
+
+set.seed(123)
+
+sample_1 <- geomapping %>% 
+  subset(mine_size == "Large" & block == "B") %>%
+  sample_n(2) %>%
+  mutate(value = sample(1:2, size = n(), replace = TRUE))
+
+sample_2 <- geomapping %>%
+  subset(mine_size == "Large" & block == "D") %>%
+  sample_n(2) %>%
+  mutate(value = sample(1:2, size = n(), replace = TRUE))
+
+sample_3 <- geomapping %>%
+  subset(mine_size == "Small" & block == "B") %>%
+  sample_n(7) %>%
+  mutate(value = sample(1:7, size = n(), replace = TRUE))
+
+sample_4 <- geomapping %>%
+  subset(mine_size == "Small" & block == "D") %>%
+  sample_n(11) %>%
+  mutate(value = sample(1:11, size = n(), replace = TRUE))
+
+sample <- rbind(sample_1, sample_2, sample_3, sample_4)
+
+# Export sample to file
+write_csv(sample, "sample_frame.csv")
+
+sample_large <- rbind(sample_1, sample_2)
+
+# Remove rows from geomapping that are in sample_large
+
+new_sf <- anti_join(geomapping, sample_large)
+
+new_sample <- new_sf %>% 
+  subset(mine_size == "Large") %>%
+  sample_n(3) %>%
+  mutate(value = sample(1:3, size = n(), replace = TRUE))
+new_sample 
+
+
+# How to convert DMS to DD 
+
+# Convert to a string, ensuring that it has 7 characters, padding with zeros if necessary
+geomapping$s_dms <- sprintf("%08.1f", geomapping$s)
+geomapping$e_dms <- sprintf("%09.1f", geomapping$e)
+head(geomapping$e_dms)
+
+# Insert the spaces and the indicators
+geomapping$s_dms2 <- paste0(substr(geomapping$s_dms, 1, 2), "d", 
+                    substr(geomapping$s_dms, 3, 4), "m", 
+                    substr(geomapping$s_dms, 5, 8), "sS")
+head(geomapping$s_dms2)
+
+geomapping$e_dms2 <- paste0(substr(geomapping$e_dms, 1, 3), "d", 
+                            substr(geomapping$e_dms, 4, 5), "m", 
+                            substr(geomapping$e_dms, 6, 9), "sE")
+head(geomapping$e_dms2)
+# Convert dms to dd using conv_units from the measurements package
+
+geomapping$s_dd <- char2dms(geomapping$s_dms2, chd='d', chm='m', chs='s') %>% as.numeric()
+geomapping$e_dd <- char2dms(geomapping$e_dms2, chd='d', chm='m', chs='s') %>% as.numeric()
+head(geomapping$s_dd)
+head(geomapping$e_dd)
+
+# If s_dd column is NA then make value = s column to create a new column called south
+geomapping <- geomapping %>% 
+  mutate(south = ifelse(is.na(s_dd), latitude, s_dd))
+
+geomapping <- geomapping %>% 
+  mutate(east = ifelse(is.na(e_dd), longitude, e_dd))
+
+# Basic map plot
+world_map <- map_data("world")
+
+# Calculate limits with a buffer
+buffer <- 0.001 # Adjust the buffer size as needed
+x_lim <- range(geomapping$e_dd, na.rm = TRUE) + c(-buffer, buffer)
+y_lim <- range(geomapping$s_dd, na.rm = TRUE) + c(-buffer, buffer)
+
+# Create the plot
+ggplot() +
+  geom_polygon(data = world_map, aes(x = long, y = lat, group = group), fill = "gray80", color = "white") +
+  geom_point(data = geomapping, aes(x = east, y = south, size = value_miners, color = num_miners), alpha = 0.5) +
+  scale_size_continuous(range = c(1, 6), 
+                        guide = "none") + # Adjust point sizes between 1 and 6
+  labs(title = "Mine Locations",
+       x = "Longitude",
+       y = "Latitude",
+       color = "Number of Miners") +
+  guides(color = guide_legend(override.aes = list(size = 4))) +  
+  theme_minimal() +
+  coord_fixed(1.3) + # Maintain aspect ratio
+  xlim(x_lim) + # Apply calculated x limits
+  ylim(y_lim) # Apply calculated y limits
+
+ggsave("mine_locations.png", width = 12, height = 12, units = "cm")
+
+# Step 1: Create an sf object using longitude and latitude
+# 
+geomapping_s <- geomapping %>% filter(!is.na(east) & !is.na(south)) 
+
+geomapping_sf <- geomapping_s %>%
+  st_as_sf(coords = c("east", "south"), crs = 4326)  # WGS84 CRS
+
+# Step 2: Reproject to a metric CRS (e.g., UTM zone or Web Mercator)
+# Example: Use UTM zone 36S if your locations are in Southern Africa
+geomapping_sf <- st_transform(geomapping_sf, crs = 32736)  # UTM zone 36S (EPSG:32736)
+
+# Step 3: Extract X and Y in metres
+geomapping_coords <- st_coordinates(geomapping_sf)
+geomapping_s$east_m <- geomapping_coords[, 1]
+geomapping_s$south_m <- geomapping_coords[, 2]
+
+# Step 4: Zero east_m and south_m on the minimum values
+geomapping_s$east_m <- geomapping_s$east_m - min(geomapping_s$east_m, na.rm = TRUE)
+geomapping_s$south_m <- geomapping_s$south_m - min(geomapping_s$south_m, na.rm = TRUE)
+ggplot() +
+  geom_point(data = geomapping_s, aes(x = east_m, y = south_m, size = value_miners, color = num_miners), alpha = 0.5) +
+  scale_size_continuous(range = c(1, 6), guide = "none") +
+  labs(x = "West-East (m)",
+       y = "South-North (m)",
+       color = "Number of Miners") +
+  guides(color = guide_legend(override.aes = list(size = 4))) +
+  theme_minimal() +
+  coord_fixed()
+
+# Save the plot
+ggsave("mine_locations_m.png", width = 12, height = 12, units = "cm")
+
+# Define the bounding box or a central point for the area of interest
+
+# Register your Google API key
+register_google(key = "AIzaSyA0UvQHojYr9yyjW1DwP09vNL2ojLgst4k")  # Replace with your actual Google Maps API key
+
+
+# For demonstration, let's assume a broad area. Adjust according to your data's location
+map_area <- c(left = min(geomapping$east, na.rm = TRUE), 
+              bottom = min(geomapping$south, na.rm = TRUE), 
+              right = max(geomapping$east, na.rm = TRUE), 
+              top = max(geomapping$south, na.rm = TRUE))
+
+# Fetch the map
+map_image <- get_map(location = map_area, source = "google", maptype = "terrain", zoom = 12)
+
+ggmap(map_image) +
+  geom_point(data = geomapping, aes(x = east, y = south), color = "red", size = value, alpha = 0.7) +
+  labs(title = "Mine Locations on OpenStreetMap", x = "Longitude", y = "Latitude") +
+  theme_light()
+
+map <- leaflet(data = geomapping) %>% 
+  addProviderTiles(providers$Esri.WorldImagery) %>% 
+  addMarkers(~east, ~south, popup = ~mine_name) %>% 
+  addScaleBar(position = "bottomleft",               # Places the scale bar at the bottom left
+              options = scaleBarOptions(maxWidth = 100, metric = TRUE, imperial = FALSE))
+
+# Save map as jpg
+saveWidget(map, "map.html", selfcontained = TRUE)
+
+# Make table of geomapping$num_miners and geomapping$block with frequency and row percetages with tidyverse
+my_controls <- tableby.control(
+  total = T,
+  test=F,
+  numeric.stats = c("medianq1q3", "Nmiss2"),
+  cat.stats = c("countpct", "Nmiss2"),
+  stats.labels = list(
+    medianq1q3 = "Median (Q1, Q3)", 
+    Nmiss2 = "Missing"
+  ))
+
+tab_map <- tableby(block ~ num_miners,
+                 data = geomapping,
+                 control = my_controls)
+
+summ_tab_map <- summary(tab_map,
+                      digits=0, digits.pct=0)
+
+write2word(summ_tab_map, "~tab_map")
+
+summary(geomapping$p_acc)
