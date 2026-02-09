@@ -221,7 +221,7 @@ ggsave("mine_locations_m.png", width = 12, height = 12, units = "cm")
 # Define the bounding box or a central point for the area of interest
 
 # Register your Google API key
-register_google(key = "AIzaSyA0UvQHojYr9yyjW1DwP09vNL2ojLgst4k")  # Replace with your actual Google Maps API key
+register_google(key = "xxx")  # Replace with your actual Google Maps API key
 
 
 # For demonstration, let's assume a broad area. Adjust according to your data's location
