@@ -1,0 +1,499 @@
+# Install and load necessary packages
+if (!require(ape)) install.packages("ape")  # Phylogenetic analysis
+if (!require(BiocManager)) install.packages("BiocManager")  # Bioconductor manager
+if (!require(ggtree)) BiocManager::install("ggtree")  # Tree visualization         # Tree visualization
+library(ape)                           # Phylogenetic functions
+library(ggtree)                        # Tree visualization
+library(ggplot2)                       # Plotting
+library(tidyverse)                     # Data manipulation
+library(gridExtra)
+
+# Set working directory to where the data is stored
+setwd("~/Library/CloudStorage/OneDrive-ImperialCollegeLondon/PhD/Data/WGS")
+
+
+set.seed(123)
+# Load culture data
+culture <- read_csv("culture_log.csv")
+glimpse(culture)
+
+# Remove all leading spaces and "-" in study_id
+culture <- culture %>% mutate(study_id = str_trim(study_id),
+                              study_id = str_replace_all(study_id, " ", ""),
+                              study_id = str_replace_all(study_id, "-", ""))
+
+# Change mgit_result from AUTOMATIC_1 to positive and AUTOMATIC to negative, and final_res positive_for_mtb_complex to mtb_complex
+culture <- culture %>% mutate(mgit_result = ifelse(mgit_result == "AUTOMATIC_1", "positive", 
+                                                   ifelse(mgit_result == "AUTOMATIC", "negative", mgit_result)), 
+                              final_res = ifelse(final_res == "positive_for_mtb_complex", "mtb_complex", final_res), 
+                              final_res = ifelse(is.na(final_res), "sample leaked", final_res))
+
+dim(culture) # 303 samples 
+
+#StataTab(culture$final_res) # Check mgit_result
+
+# Filter if study_id is NOT 5 characters
+culture_check <- culture %>% filter(nchar(study_id) != 5)
+culture_check
+
+# Remove if study_id is not 5 characters
+culture <- culture %>% filter(nchar(study_id) == 5)
+
+# Filter if duplicated study_id
+culture_dup <- culture %>% group_by(study_id) %>% arrange(study_id, ttp) %>% filter(n() > 1)
+culture_dup
+
+# If duplicated, keep the row with the lowest ttp; use arrange to do. if ttp is NA then remove any 
+culture <- culture %>% 
+  arrange(study_id, ttp) %>% 
+  group_by(study_id) %>% 
+  slice(1) %>% 
+  ungroup()
+# Kept all those with positive ttp
+
+# Create initial column from the first character of ppt_initials
+culture <- culture %>% mutate(initial = substr(ppt_initials, 1, 1))
+
+# StataTab(culture$final_res)
+
+# list if study_id starts with S or F 
+x <- culture %>% filter(grepl("^[ESF]", study_id))
+x
+
+# Create a group variable, if study contains C - cohort, X - xsec, T - community, S - supp, F - contact 
+culture <- culture %>% 
+  mutate(group = case_when(
+    grepl("C", study_id) ~ "cohort",
+    grepl("X", study_id) ~ "xsec",
+    grepl("T", study_id) ~ "community",
+    grepl("S", study_id) ~ "supp",
+    grepl("F", study_id) ~ "contact",
+    TRUE ~ NA
+  ))
+
+
+dim(culture)
+
+culture %>% filter(group == "cohort" & final_res == "mtb_complex") %>% 
+  select(study_id, group, final_res) %>% 
+  arrange(study_id)
+
+# Classify study_id's of S9001, S9002, S9004, S9005, S9006 as "group" of community, S9000 as miner
+culture <- culture %>% 
+  mutate(group = case_when(
+    study_id %in% c("S9001", "S9002", "S9004", "S9005", "S9006") ~ "community_x",
+    study_id == "S9000" ~ "xsec",
+    TRUE ~ group
+  ))
+table(culture$final_res, culture$group, useNA = "always")
+table(culture$final_res, useNA = "always")
+
+# Count of culture
+
+# Load the phylogenetic tree
+tree_n <- read.tree("final-tree.newick")
+meta <- read.csv("wgs_meta.csv", header = TRUE, stringsAsFactors = FALSE)
+overview <- read.csv("grand-overview-plus.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Check tip names 
+class(tree_n)
+glimpse(meta)
+glimpse(overview)
+
+# Rename overview wgs_id from id 
+overview <- overview %>% rename(wgs_id = id)
+
+# left join meta and overview by wgs_id
+meta <- left_join(meta, overview, by = "wgs_id")
+
+glimpse(meta)
+
+# Calculate the distance matrix
+dist_matrix <- cophenetic.phylo(tree_n)
+
+View(dist_matrix)
+
+# Plot phylogenetic tree of tree_n using ggtree
+ggtree(tree_n) + 
+  geom_tiplab(size = 3) +             
+  geom_point2(aes(subset = isTip), size = 2) +   
+  ggtitle("Phylogenetic Tree") +   
+  theme(legend.position = "right") 
+
+# Define new root as it is the mid-point
+outgroup_taxa <- "K29X0482" 
+
+# Create a new, rooted tree object
+# resolve.root = TRUE creates a bifurcating root (usually recommended)
+tree_n <- ape::root(tree_n, outgroup = outgroup_taxa, resolve.root = TRUE)
+
+# Export as CSV
+write.csv(meta, "wgs_meta_updated.csv", row.names = FALSE)
+table(meta$simp_gp)
+table(meta$q_score, useNA = "always")
+dim(meta)
+# Check if all tree tip labels are present in meta$wgs_id
+missing_tips <- setdiff(tree_n$tip.label, meta$wgs_id)
+
+# Remove all " " spaces from meta$simp_gp
+meta$simp_gp <- str_replace_all(meta$simp_gp, " ", "")
+
+# Create order as factor of simp_gp miner, ex-miner, community, recurrent
+meta$simp_gp <- factor(meta$simp_gp, levels = c("miner", "ex-miner", "community", "recurrent"))
+
+# Add metadata to the tree
+tree_meta <- ggtree(tree_n) %<+% meta
+
+# Build heatmap matrix/data.frame: rows = tips (labels), cols = vars
+heatmap_df <- tree_meta$data %>%
+  filter(isTip) %>%
+  select(label, main_lineage) %>%
+  mutate(
+    main_lineage = as.factor(main_lineage) 
+  ) %>%
+  column_to_rownames("label")
+
+class(heatmap_df$main_lineage)
+
+# waht is order of simp_gp in df meta
+table(meta$simp_gp)
+
+# Plot the tree with metadata
+table(meta$simp_gp, useNA = "always")
+treemap <- tree_meta + 
+  geom_tippoint(aes(color = as.factor(simp_gp)), size = 4) +   
+  theme(title = element_text(size = 14),
+        legend.position = "right", 
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.key.size = unit(0.4, "cm")) +                          
+  scale_color_discrete(
+    name = "Group",
+    labels = c(
+      "miner"     = "Miner",
+      "ex-miner"  = "Ex-miner",
+      "community" = "Miner community",
+      "recurrent" = "Other community"
+    )) +
+  geom_treescale(x = 500, y = 0, offset = 1, width = 100, fontsize = 0) +
+  annotate("text", x = 550, y = 1, label = "100 SNP distance", size = 2.5)
+
+# 4) Ensure heatmap row order matches the tip plotting order
+tip_order <- treemap$data$label[treemap$data$isTip]
+heatmap_df <- heatmap_df[tip_order, , drop = FALSE]
+
+phy_tree <- gheatmap(
+  treemap,
+  heatmap_df,
+  offset = 5,
+  width = 0.12,
+  colnames = FALSE,
+  colnames_angle = 90,
+  colnames_offset_y = 0.5
+) +
+  theme(legend.position = "right") +
+  scale_fill_manual(
+    name = "Main Lineage",
+    values = c(
+      "lineage1" = "#1b9e77",
+      "lineage2" = "#d95f02",
+      "lineage3" = "#7570b3",
+      "lineage4" = "#e7298a"
+    ),
+    labels = c(
+      "lineage1" = "Lineage 1",
+      "lineage2" = "Lineage 2",
+      "lineage3" = "Lineage 3",
+      "lineage4" = "Lineage 4"
+    )
+  )
+phy_tree
+ggsave("phylogenetic_tree.png", width = 8, height = 6, dpi = 300)
+
+# Perform hierarchical clustering by 12 SNP distance
+threshold <- 12  
+cluster_assignments <- hclust(as.dist(dist_matrix), method = "average")
+clusters <- cutree(cluster_assignments, h = threshold)
+table(clusters)
+
+# large clusters > 1 
+large_clusters <- names(table(clusters)[table(clusters) > 1])
+large_clusters
+
+# Filter to cluster 1 and plot
+tips_30 <- names(clusters[clusters == 28]) 
+subtree_30 <- keep.tip(tree_n, tips_30) 
+# Check tips of subtree_30 
+subtree_30$tip.label 
+# Keep rows of meta that match subtree_30$tip.label 
+meta_30 <- meta[meta$wgs_id %in% subtree_30$tip.label, ] 
+# Join subtree_30 with meta_30 
+subtree_30x <- ggtree(subtree_30) %<+% meta_30
+
+# Basic tree plot with tip labels
+p1 <- subtree_30x +         
+  geom_tippoint(aes(color = as.factor(simp_gp)), size = 2) +       
+  ggtitle("Cluster 1") + 
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0, label = "1 SNP")+
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3) + 
+  labs(color = NULL)
+p1
+
+# Filter to cluster 10 and plot
+tips_30 <- names(clusters[clusters == 14]) 
+subtree_30 <- keep.tip(tree_n, tips_30) 
+# Check tips of subtree_30 
+subtree_30$tip.label 
+# Keep rows of meta that match subtree_30$tip.label 
+meta_30 <- meta[meta$wgs_id %in% subtree_30$tip.label, ] 
+# Join subtree_30 with meta_30 
+subtree_30x <- ggtree(subtree_30) %<+% meta_30
+
+# Basic tree plot with tip labels
+p2 <- subtree_30x +         
+  geom_tippoint(aes(color = as.factor(mine)), size = 2) +       
+  ggtitle("Cluster 2") + 
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0, label = "1 SNP")+
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3) + 
+  labs(color = NULL)
+p2
+
+# Filter to cluster 10 and plot
+tips_30 <- names(clusters[clusters == 22]) 
+subtree_30 <- keep.tip(tree_n, tips_30) 
+# Check tips of subtree_30 
+subtree_30$tip.label 
+# Keep rows of meta that match subtree_30$tip.label 
+meta_30 <- meta[meta$wgs_id %in% subtree_30$tip.label, ] 
+# Join subtree_30 with meta_30 
+subtree_30x <- ggtree(subtree_30) %<+% meta_30
+
+# Basic tree plot with tip labels
+p3 <- subtree_30x +         
+  geom_tippoint(aes(color = as.factor(mine)), size = 2) +       
+  ggtitle("Cluster 3") + 
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0, label = "1 SNP")+
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3) + 
+  labs(color = NULL)
+p3
+
+# Filter to cluster 10 and plot
+tips_30 <- names(clusters[clusters == 24]) 
+subtree_30 <- keep.tip(tree_n, tips_30) 
+# Check tips of subtree_30 
+subtree_30$tip.label 
+# Keep rows of meta that match subtree_30$tip.label 
+meta_30 <- meta[meta$wgs_id %in% subtree_30$tip.label, ] 
+# Join subtree_30 with meta_30 
+subtree_30x <- ggtree(subtree_30) %<+% meta_30
+
+# Basic tree plot with tip labels
+p4 <- subtree_30x +         
+  geom_tippoint(aes(color = as.factor(mine)), size = 2) +       
+  ggtitle("Cluster 4") + 
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0, label = "1 SNP")+
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3) + 
+  labs(color = NULL)
+p4
+
+# Filter to cluster 10 and plot
+tips_30 <- names(clusters[clusters == 27]) 
+subtree_30 <- keep.tip(tree_n, tips_30) 
+# Check tips of subtree_30 
+subtree_30$tip.label 
+# Keep rows of meta that match subtree_30$tip.label 
+meta_30 <- meta[meta$wgs_id %in% subtree_30$tip.label, ] 
+# Join subtree_30 with meta_30 
+subtree_30x <- ggtree(subtree_30) %<+% meta_30
+
+# Basic tree plot with tip labels
+p5 <- subtree_30x +         
+  geom_tippoint(aes(color = as.factor(mine)), size = 2) +       
+  ggtitle("Cluster 5") + 
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0, label = "1 SNP")+
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3) + 
+  labs(color = NULL)
+p5
+
+# Filter to cluster 10 and plot
+tips_30 <- names(clusters[clusters == 32]) 
+subtree_30 <- keep.tip(tree_n, tips_30) 
+# Check tips of subtree_30 
+subtree_30$tip.label 
+# Keep rows of meta that match subtree_30$tip.label 
+meta_30 <- meta[meta$wgs_id %in% subtree_30$tip.label, ] 
+# Join subtree_30 with meta_30 
+subtree_30x <- ggtree(subtree_30) %<+% meta_30
+
+# Basic tree plot with tip labels
+p6 <- subtree_30x +         
+  geom_tippoint(aes(color = as.factor(mine)), size = 2) +       
+  ggtitle("Cluster 6") + 
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0, label = "1 SNP")+
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3) + 
+  labs(color = NULL)
+p6
+
+# Arrange plots in a grid
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol = 2)
+
+# Save the combined plot
+ggsave("cluster_plots.png", width = 12, height = 10)
+
+# clusters to show
+ids <- c(1, 10, 14, 22, 24, 27, 28, 32)
+
+# 1) multiPhylo of subtrees
+trees <- lapply(ids, function(cid) {
+  tips <- names(clusters[clusters == cid])
+  keep.tip(tree_n, tips)
+})
+names(trees) <- paste0("Cluster ", ids)
+class(trees) <- "multiPhylo"
+
+# 2) base ggtree (this has tip coordinates + `.id`)
+p <- ggtree(trees)
+
+# 3) build a tip-level dataframe with coords and your metadata
+tip_df <- p$data %>%
+  filter(isTip) %>%
+  # join metadata by tip label; keep `.id` from p$data
+  left_join(
+    meta %>% transmute(label = wgs_id, study_id, mine, simp_gp, prev_tb, cough_tb, sub_lineage = sub("^lineage", "L", sub_lineage)),
+    by = "label"
+  )
+
+# new variable facet_lab paste(.id, sub_lineage, sep = " - ")
+tip_df <- tip_df %>%
+  mutate(facet_lab = paste(.id, sub_lineage, sep = " - "))
+
+# one label per .id
+custom_names <- tip_df %>%
+  distinct(.id, sub_lineage) %>%
+  mutate(
+    .id_chr = as.character(.id),
+    lab     = paste(.id, sub_lineage, sep = " - ")
+  )
+
+custom_names_vec <- setNames(custom_names$lab, custom_names$.id_chr)
+
+max_x <- max(p$data$x, na.rm = TRUE)
+#View(tip_df)
+
+# 4) plot with facets (no %<+%), add 1-SNP scale bar + custom label
+p_facets <- p +
+  geom_tippoint(
+    data = tip_df,
+    aes(x = x, y = y, color = as.factor(mine), shape = as.factor(simp_gp)),
+    size = 3,
+    inherit.aes = FALSE
+  ) +
+  labs(color = NULL, shape = NULL) +
+  facet_wrap(
+    ~ .id,
+    ncol = 2,
+    scales = "fixed",
+    labeller = labeller(.id = custom_names_vec)) +   # same scale for all panels
+  xlim(0, max_x) +                                  # enforce same SNP axis
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0) +
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3)+
+scale_color_viridis_d(option = "turbo")
+
+p_facets
+
+# Change cluster names from c(1, 10, 14, 22, 24, 27, 28, 32) to 1 to 8
+# Manually ring the <6 SNPs 
+# Cluster 1 - "K40X0395" "K21C0325"
+# Cluster 10 - “K36T0903" "K12C2012"
+# Cluster 14 - "K57TAT138" "K02C1229" 
+# Cluster 27 - "K34X0146" "K24C2021"
+# Cluster 31 - "K03X0413" "K19C0720"
+
+# Save this plot
+ggsave("cluster_facet_plots.png", width = 9, height = 7, dpi = 300)
+
+## Tree with prev_tb and cough_tb
+# 4) plot with facets (no %<+%), add 1-SNP scale bar + custom label
+p_facets <- p +
+  geom_tippoint(
+    data = tip_df,
+    aes(x = x, y = y, color = as.factor(mine), shape = as.factor(cough_tb)),
+    size = 3,
+    inherit.aes = FALSE
+  ) +
+  labs(color = NULL, shape = NULL) +
+  facet_wrap(
+    ~ .id,
+    ncol = 2,
+    scales = "fixed",
+    labeller = labeller(.id = custom_names_vec)) +   # same scale for all panels
+  xlim(0, max_x) +                                  # enforce same SNP axis
+  geom_treescale(x = 0, y = 0, width = 1, fontsize = 0) +
+  annotate("text", x = 0.5, y = -0.5, label = "1 SNP", size = 3)
+p_facets
+
+# Extract list of variable label from DF tip_df
+x <- unique(tip_df$study_id)
+# Remove if starts with tat 
+x <- x[!grepl("^tat", x)]
+x
+
+y <- unique(meta$study_id)
+y <- y[!grepl("^tat", y)]
+y
+
+# list of z if in y but not x
+z <- setdiff(y, x)
+z
+#########################################
+# Plotting the distance between samples #
+#########################################
+
+# Geographic distance matrix from coordinates
+coords <- data.frame(sample = meta$wgs_id,
+                     east_m = meta$east_m,
+                     south_m = meta$south_m)
+
+row.names(coords) <- coords$sample
+
+geo_dist <- dist(coords[, c("east_m", "south_m")])  # Euclidean distance in metres
+
+# Match the two matrices by sample names
+common_samples <- intersect(rownames(dist_matrix), rownames(as.matrix(geo_dist)))
+snp_dist_sub <- dist_matrix[common_samples, common_samples]
+geo_dist_sub <- as.matrix(geo_dist)[common_samples, common_samples]
+
+# Convert to pairwise dataframe
+df <- data.frame(
+  SNP_distance = as.vector(snp_dist_sub[lower.tri(snp_dist_sub)]),
+  Geo_distance = as.vector(geo_dist_sub[lower.tri(geo_dist_sub)])
+)
+
+glimpse(df)
+ggplot(df, aes(x = Geo_distance, y = SNP_distance)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    x = "Geographic distance (m)",
+    y = "SNP distance"
+  ) +
+  theme_minimal(base_size = 14)
+ggsave("snp_vs_geo_distance.png", width = 8, height = 6, dpi = 300)
+
+# median, Q1 and Q3 of meta$age by simp_gp, deduplicate X0801
+head(meta)
+meta %>% distinct(study_id, .keep_all = TRUE) %>%
+  group_by(simp_gp) %>%
+  summarise(
+    count = n(),
+    median_age = median(age, na.rm = TRUE),
+    Q1_age = quantile(age, 0.25, na.rm = TRUE),
+    Q3_age = quantile(age, 0.75, na.rm = TRUE), 
+    
+  )
+
+# median age in meta
+summary(meta$age)
+
+table(meta$main_lineage)
+
