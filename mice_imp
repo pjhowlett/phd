@@ -1,0 +1,711 @@
+
+################################################
+# Multiple chain imputation for whole data set #
+################################################
+
+# Imputation sample
+# Mine size - make mine size small if group is cohort or xm and mine_size is NA, else use mine_size
+qxh_imp_size <- qxh %>%
+  mutate(mine_size = case_when(
+    (group == "Cohort miner" | group == "Cross-sectional miner") & is.na(mine_size) ~ "Small",
+    TRUE ~ mine_size
+  ))
+table(qxh_imp_size$value_miners, qxh_imp_size$group, useNA = "ifany")
+
+# Identify rows where size_grp is NA and group is "cohort" or "xm"
+missing_idx <- which(qxh_imp_size$group %in% c("Cohort miner", "Cross-sectional miner") & is.na(qxh_imp_size$size_grp))
+
+# Randomly assign to different levels
+set.seed(123)  # for reproducibility
+assignments <- sample(c("5", "18", "38"),
+                      size = length(missing_idx),
+                      replace = TRUE,
+                      prob = c(0.4, 0.4, 0.2))
+
+# Recode numeric values into size groups
+assignments_grp <- ifelse(assignments %in% c(5, 18), "0-25", "26-100")
+
+# Assign to missing values
+qxh_imp_size$size_grp[missing_idx] <- assignments_grp
+
+# For all variables
+mice_all <- qxh_imp_size %>%
+  select(record_id, age, group, 
+         tb_pmh_join, ever_smok_comb,smoking_comb, comb_hiv, ses, educ, 
+         room_no, marital, risk_trans, risk_cafe, risk_church, room_cat,
+         con_live, con_work, no_meals, cann_comb)
+colSums(is.na(mice_all))
+
+# For variables that are specific to miners 
+mice_mines <- qxh_imp_size %>%
+  filter(ers_gp %in% c("Miner", "Ex-miner"))%>%
+  select(record_id, age,group, ses, tb_period,
+         all_yrs, latency, latency_cat, all_yrs_cat2, dust_zone, dust_zone2, 
+         job_role, dust_zone3)
+colSums(is.na(mice_mines))
+
+# For variables that are specific to active miners
+mice_active <- qxh_imp_size %>%
+  filter(ers_gp %in% c("Miner")) %>%
+  select(record_id, age, group, ses, educ, all_yrs_cat2, mine_size, size_grp, 
+         all_yrs, mask, water, dusty) 
+colSums(is.na(mice_active)) 
+
+# For MICE all
+# Run imptuation with the specified methods
+imp_all <- mice(mice_all, m = 1, printFlag = FALSE)
+# Extract the first completed dataset
+imputed_all <- complete(imp_all, action = 1)
+# Check for any remaining NAs
+colSums(is.na(imputed_all))
+
+# For MICE mines 
+# Run imputation with the specified methods
+imp_mines <- mice(mice_mines, m = 1, printFlag = FALSE)
+# Extract the first completed dataset
+imputed_mines <- complete(imp_mines, action = 1)
+# Check for any remaining NAs - some remaining - zero lines can't impute 
+colSums(is.na(imputed_mines))
+
+# For MICE active miners
+# Run imputation with the specified methods
+imp_active <- mice(mice_active, m = 1, printFlag = FALSE)
+# Extract the first completed dataset
+imputed_active <- complete(imp_active, action = 1)
+# Check for any remaining NAs
+colSums(is.na(imputed_active))
+
+# Combine all imputed datasets into one
+
+# Make a copy to avoid overwriting original
+qxh_imp <- qxh_imp_size  
+
+# Impute values from mice_all into qxh_imp 
+imputed_all$record_id <- mice_all$record_id
+vars_all <- setdiff(names(imputed_all), "record_id")
+
+for (var in vars_all) {
+  missing_idx <- which(is.na(qxh_imp[[var]]) & qxh_imp$record_id %in% imputed_all$record_id)
+  rec_ids <- qxh_imp$record_id[missing_idx]
+  qxh_imp[missing_idx, var] <- imputed_all[match(rec_ids, imputed_all$record_id), var]
+}
+colSums(is.na(qxh_imp[, vars_all]))
+
+#  Impute values from mice_mines into qxh_imp (Miner or Ex-miner only) 
+imputed_mines$record_id <- mice_mines$record_id
+vars_mines <- setdiff(names(imputed_mines), "record_id")
+
+mine_idx <- which(qxh_imp$ers_gp %in% c("Miner", "Ex-miner"))
+rec_ids_mines <- qxh_imp$record_id[mine_idx]
+
+for (var in vars_mines) {
+  missing_idx <- mine_idx[is.na(qxh_imp[[var]][mine_idx]) & qxh_imp$record_id[mine_idx] %in% imputed_mines$record_id]
+  rec_ids <- qxh_imp$record_id[missing_idx]
+  qxh_imp[missing_idx, var] <- imputed_mines[match(rec_ids, imputed_mines$record_id), var]
+}
+colSums(is.na(qxh_imp[, vars_mines]))
+
+
+#  Impute values from mice_active into qxh_imp (active Miners only)
+imputed_active$record_id <- mice_active$record_id
+vars_active <- setdiff(names(imputed_active), "record_id")
+
+active_idx <- which(qxh_imp$ers_gp == "Miner")
+rec_ids_active <- qxh_imp$record_id[active_idx]
+
+for (var in vars_active) {
+  missing_idx <- active_idx[is.na(qxh_imp[[var]][active_idx]) & qxh_imp$record_id[active_idx] %in% imputed_active$record_id]
+  rec_ids <- qxh_imp$record_id[missing_idx]
+  qxh_imp[missing_idx, var] <- imputed_active[match(rec_ids, imputed_active$record_id), var]
+}
+colSums(is.na(qxh_imp[, vars_active]))
+
+# Optional: Check
+table(qxh_imp$size_grp, qxh_imp$mine_size, useNA = "ifany")
+table(qxh$size_grp, qxh$mine_size, useNA = "ifany")
+table(qxh_imp$dust_zone3, qxh_imp$dust_zone, useNA = "ifany")
+
+##########################################
+# Fit IPW model with multiple imputation #
+##########################################
+
+# In qxh_imp, filter to ers_gp == "Miner" or ers_gp == "Ex-miner"
+qxh_imp_m <- qxh_imp %>%
+  filter(ers_gp %in% c("Miner"))
+table(qxh_imp_m$mine_size, qxh_imp_m$size_grp, useNA = "ifany")
+
+# Set knots at default at default quantiles (0.05, 0.35, 0.65 and 0.95)
+k <- c(0.05, 0.35, 0.65, 0.95)
+k_age <- quantile(qxh_imp_m$age, k, na.rm = TRUE)
+k_all_yrs <- quantile(qxh_imp_m$all_yrs, k, na.rm = TRUE)
+
+table(qxh_imp_m$cohort_names[qxh_imp_m$high_att == 1], qxh_imp_m$size_grp[qxh_imp_m$high_att == 1], useNA = "ifany")
+table(qxh_imp_m$mine_size, useNA = "ifany")
+
+# Fit model across all imputed datasets
+ipw_mod <- with(qxh_imp_m, glm(
+  high_att ~ mine_size * rcs(age, k_age) + mine_size * rcs(all_yrs, k_all_yrs)  + mine_size * tb_pmh_join
+    + mine_size *job_role + mine_size *ever_smok_comb  + mine_size *ses + comb_hiv *mine_size + no_meals*mine_size,
+  family = binomial(link = "logit")
+))
+
+# Summary of pooled results
+summary(ipw_mod)
+
+# Get predicted probabilities for each imputed dataset
+qxh_imp_m$p_ind <- predict(ipw_mod, type = "response")
+
+summary(qxh_imp_m$p_ind)
+
+# Calculate inverse probability weights (IPW) 
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw = ifelse(high_att == 1, 1 / p_ind, 1 / (1 - p_ind)))
+
+# Stabalise IPW
+p_marg <- mean(qxh_imp_m$high_att, na.rm = TRUE)
+p_marg
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw_stab = ifelse(high_att == 1,
+                           p_marg / p_ind,
+                           (1 - p_marg) / (1 - p_ind)))
+
+# Check distribution of stabilized IPW
+Hmisc::describe(qxh_imp_m$ipw_stab)
+
+# What are 99th centiles of stabilized IPW?
+quantile(qxh_imp_m$ipw_stab, probs = 0.99, na.rm = TRUE)
+# Truncate at 1st and 99th centiles of IPW
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw_stab = ifelse(ipw_stab < quantile(ipw_stab, 0.01, na.rm = TRUE), 
+                           quantile(ipw_stab, 0.01, na.rm = TRUE), 
+                           ifelse(ipw_stab > quantile(ipw_stab, 0.98, na.rm = TRUE), 
+                                  quantile(ipw_stab, 0.98, na.rm = TRUE), ipw_stab)))
+
+
+# Plot distribution of stabilized IPW by high_att
+ipw_stab_dist <- ggplot(qxh_imp_m, aes(x = ipw_stab, fill = factor(high_att))) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.7) +
+  labs(x = "Stabilised IPW",
+       y = "Count",
+       fill = "High Attendance") +
+  theme_pubr(base_size = 6) +
+  scale_fill_manual(values = c("red", "blue"))
+
+Hmisc::describe(qxh_imp_m$ipw_stab)
+
+# Plot distribution of final IPW by size_grp
+ipw_stab_plot <- ggplot(qxh_imp_m, aes(x = ipw_stab, fill = size_grp)) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.7) +
+  labs(x = "Stabilited IPW",
+       y = "Count",
+       fill = "Mine size") +
+  theme_pubr(base_size = 10) 
+ipw_stab_plot
+ggsave("final_ipw_dist.jpg", plot = ipw_stab_plot, width = 8, height = 6, dpi = 400)
+
+# ROC Curve and AUC (Discrimination)
+roc_obj <- roc(qxh_imp_m$high_att, qxh_imp_m$p_ind)
+auc(roc_obj)
+plot(roc_obj, main = "ROC Curve for IPW Model")
+
+# Calibration Plot (Predicted vs Observed)
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(p_bin = ntile(p_ind, 10))
+calib <- qxh_imp_m %>%
+  group_by(p_bin) %>%
+  summarise(mean_p = mean(p_ind),
+            mean_obs = mean(high_att))
+
+calibration <- ggplot(calib, aes(x = mean_p, y = mean_obs)) +
+  geom_point() +
+  geom_abline(linetype = "dashed") +
+  labs(x = "Mean probability of high attendance", 
+       y = "Mean observed high attendance") + 
+  theme_pubr(base_size = 10)
+
+# Arrange two plots 
+ipw_calib <- ggarrange(ipw_stab_dist, calibration, ncol = 2, nrow = 1, labels = c("A", "B"),
+        legend = "bottom")
+
+# Save the combined plot
+ggsave("ipw_calib.jpg", plot = ipw_calib, width = 8, height = 6, dpi = 400)
+
+# Brier's score
+mean((qxh_imp_m$high_att - qxh_imp_m$p_ind)^2)
+
+# Now additional weighting/scaling for non-attending miners - proportion of mines in size cat with any attendance/proportion of mines in size cat as total
+tab <- readRDS("mine_wts.rds")
+
+tab$prop <-  tab$n_mines / sum(tab$n_mines, na.rm = TRUE)
+tab$zero_prop <- tab$zero_mines / sum(tab$zero_mines, na.rm = TRUE)
+tab$p_mine <- tab$prop/tab$zero_prop 
+tab$ipw <- 1 / tab$p_mine
+tab
+# Stabilised weights by shrinkage factor of 0.75 if > 1 and 1/0.75 if <1 
+shrinkage <- 0.75
+tab$ipw_mine <- 1 + (tab$ipw - 1) * shrinkage
+tab
+write.csv(tab, "ipw_mine.csv", row.names = FALSE )
+
+tab <- tab %>%select(size_grp, ipw_mine)
+
+# left_join qxh_sil with tab to get mine weights for each size_grp
+qxh_imp_m <- left_join(qxh_imp_m, tab, by = "size_grp")
+table(qxh_imp_m$size_grp, qxh_imp_m$ipw_mine, useNA = "ifany")
+mean(qxh_imp_m$ipw_mine, na.rm = TRUE)
+
+# If ipw_mine is NA, set it to 1 - not neccessary
+#qxh_imp_m$ipw_mine[is.na(qxh_imp_m$ipw_mine)] <- 1
+
+# Now multiply ipw_stab by ipw_mine to get final weights ipw 
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw = ipw_stab * ipw_mine)
+
+# Check distribution of final IPW
+dist_ipw <- Hmisc::describe(qxh_imp_m$ipw)
+dist_ipw
+
+# Centre ipw with median on 1 to improve model stability by equalling effective sample size to usual sample size
+y <- 1 - mean(qxh_imp_m$ipw, na.rm = TRUE)
+
+# Relevel ipw to make ess the same
+qxh_imp_m$ipw_y <- qxh_imp_m$ipw + y
+
+# Plot distribution of final IPW by high_att
+ipw <- ggplot(qxh_imp_m, aes(x = ipw_y, fill = size_grp)) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.7) +
+  labs(x = "Final IPW",
+       y = "Count",
+       fill = "Mine size") +
+  theme_pubr(base_size = 10) 
+ipw
+ggsave("final_ipw_dist.jpg", plot = ipw, width = 8, height = 6, dpi = 400)
+
+# Remove all variables created in ipw_stab, apart from ipw_stab
+qxh_imp_m <- qxh_imp_m %>%
+  select(-p_ind, -ipw_stab, -p_bin)
+
+# Now create dataset qxh_imp_nom with only non-miners
+qxh_imp_nom <- qxh_imp %>%
+  filter(ers_gp != "Miner" | is.na(ers_gp))
+
+# Create new var ipw = 1 for all non-miners
+qxh_imp_nom <- qxh_imp_nom %>%
+  mutate(ipw = 1)
+table(qxh_imp_nom$high_att,qxh_imp_nom$ers_gp, useNA = "ifany")
+
+# Combine the two datasets
+qxh_imp <- bind_rows(qxh_imp_m, qxh_imp_nom)
+
+# Save as RDS
+saveRDS(qxh_imp, file = "qxh_imp.rds")
+
+####################
+
+# List mine names and study_id of those with mine_size NA
+qxh %>%
+  filter(is.na(mine_size), group != "Community") %>%
+  select(study_id, other_mine)
+
+table(qxh$other_mine, useNA = "ifany")
+
+# Table of education in qxh
+table(qxh$group)
+x <- qxh %>% 
+  filter(group == "Cohort miner") %>%
+  group_by(educ_insec) %>%
+  summarise(n = n(), 
+            silic_prev = mean(silic_binlg == "yes", na.rm = TRUE),
+            silic_num = sum(silic_binlg == "yes", na.rm = TRUE),
+            tb_prev = mean(tb_pos == "Yes", na.rm = TRUE),
+            tb_num = sum(tb_pos == "Yes", na.rm = TRUE),
+            silic_tb_num = sum(silic_binlg == "yes" | tb_pos == "Yes", na.rm = TRUE),
+              .groups = "drop") 
+x
+table(qxh$educ_insec, useNA = "ifany")
+
+# final_res result for study_id X0005
+x <- qxh %>%
+  filter(study_id == "X0005") %>%
+  select(study_id, age, group, f_name, s_name, xpert_res, final_res)
+x
+
+# table of group if cult_done is 1
+table(qxh$final_res, qxh$group, useNA = "ifany")
+
+# List if xpert_pos is NA and cult_done is Performed 
+x <- qxh %>%
+  filter(is.na(xpert_pos) & cult_done == "Performed" & group == "Cross-sectional miner") %>%
+  select(study_id, age, group, f_name, s_name, add_name, mobile_1, 
+         mobile_2, mobile, nok, nok_mobile, first_name, second_name, manager_mobile)
+x
+
+# Xpert pos and group table 
+x <- table(qxh$xpert_pos, qxh$xpert_call, useNA = "ifany")
+# prop table row and 0 dp 
+prop.table(x, 1) * 100
+
+
+# Tbale rip and ers_gp 
+table(qxh$rip, useNA = "ifany")
+table(qxh$tb_when, qxh$group, useNA = "ifany")
+table(qxh$tb_type, qxh$group, useNA = "ifany")
+
+table(qxh$room_no , qxh$share_miner, useNA = "ifany")
+table(qxh$room_no , qxh$room_child, useNA = "ifany")
+table(qxh$sleep , qxh$hometown_yn, useNA = "ifany")
+
+#View(qxh %>% filter(tb_pos == "Yes") %>% select(study_id, tb_when)
+
+table(qxh$tb_when, qxh$tb_type, useNA = "ifany")
+table(qxh$tb_type)
+
+
+################################
+# INvestigation of age and all_yrs by cohort mines and mine_size and high attendance
+################################
+
+table(qxh$c_mine, qxh$mine_size, qxh$high_att, useNA = "ifany")
+
+# in qxh create variable c_mine $cohort_mines %in% c(1:23), "Cohort", "Not cohort")
+qxh <- qxh %>%
+  mutate(c_mine = ifelse(cohort_mines %in% c(1:23), "Cohort", "Not cohort"))
+
+table(qxh$mine_size, qxh$c_mine, useNA = "ifany")
+
+# Table of median and IQR 1 and 3 of age and all_yrs by c_mine and mine_size
+tab_age_allyrs <- qxh %>%
+  group_by(c_mine, mine_size) %>%
+  summarise(
+    age_median = median(age, na.rm = TRUE),
+    age_Q1 = quantile(age, 0.25, na.rm = TRUE),
+    age_Q3 = quantile(age, 0.75, na.rm = TRUE),
+    all_yrs_median = median(all_yrs, na.rm = TRUE),
+    all_yrs_Q1 = quantile(all_yrs, 0.25, na.rm = TRUE),
+    all_yrs_Q3 = quantile(all_yrs, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+tab_age_allyrs
+
+# Histogram of age by c_mine - overlayed, drop NA, facet by mine_size
+age_hist <- ggplot(
+  qxh %>% filter(!is.na(mine_size), !is.na(c_mine), !is.na(age)),
+  aes(x = age, y = after_stat(density), fill = c_mine)
+) +
+  geom_histogram(
+    position = "identity",
+    alpha = 0.4,
+    bins = 30
+  ) +
+  geom_density(
+    aes(colour = c_mine),
+    linewidth = 0.8,
+    alpha = 0
+  ) +
+  labs(
+    x = "Age",
+    y = "Density",
+    fill = "Cohort mine status",
+    colour = "Cohort mine status"
+  ) +
+  theme_pubr(base_size = 14) +
+  facet_wrap(~ mine_size)
+
+age_hist
+
+# Density histogram of age by all_yrs - overlayed, drop NA, facet by mine_size
+all_yrs_hist <- ggplot(
+  qxh %>% filter(!is.na(mine_size), !is.na(c_mine), !is.na(all_yrs)),
+  aes(x = all_yrs, y = after_stat(density), fill = c_mine)
+) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  labs(
+    x = "Years in mining",
+    y = "Density",
+    fill = "Cohort mine status"
+  ) +
+  geom_density(
+    aes(colour = c_mine),
+    linewidth = 0.8,
+    alpha = 0,
+    adjust = 1
+  ) +
+  labs(
+    x = "Years of work",
+    y = "Density",
+    fill = "Cohort mine status",
+    colour = "Cohort mine status") +
+  theme_pubr(base_size = 14) +
+  facet_wrap(~ mine_size)
+all_yrs_hist
+
+# Arrange two plots
+age_allyrs_hist <- ggarrange(
+  age_hist + theme(legend.position = "none"),
+  all_yrs_hist + theme(legend.position = "none"),
+  ncol = 1,
+  nrow = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+age_allyrs_hist
+# Save the combined plot
+ggsave("age_allyrs_hist.jpg", plot = age_allyrs_hist, width = 8, height = 10, dpi = 400)
+
+# in qxh_imp_m create variable c_mine $cohort_mines %in% c(1:23), "Cohort", "Not cohort")
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(c_mine = ifelse(cohort_mines %in% c(1:23), "Cohort", "Not cohort"))
+
+# New mine_size names 
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(
+    mine_size2 = recode(
+      mine_size,
+      Large = "Large mine (>50 miners)",
+      Small = "Small mine (≤ 50 miners)"
+    )
+  )
+
+
+# IPW results densitty histogram according to c_mine, facet by mine_size2
+ipw_cmine <- ggplot(
+  qxh_imp_m %>% filter(!is.na(mine_size2), !is.na(c_mine), !is.na(ipw_y)),
+  aes(x = ipw_y, y = after_stat(density), fill = c_mine)
+) +
+  geom_histogram(
+    position = "identity",
+    alpha = 0.4,
+    bins = 30
+  ) +
+  geom_density(
+    aes(colour = c_mine),
+    linewidth = 0.8,
+    alpha = 0
+  ) +
+  labs(
+    x = "Final IPW",
+    y = "Density",
+    fill = "Cohort mine status",
+    colour = "Cohort mine status"
+  ) +
+  theme_pubr(base_size = 14) +
+  facet_wrap(~ mine_size2)
+
+ipw_cmine
+# Save the plot
+ggsave("ipw_cmine.jpg", plot = ipw_cmine, width = 8, height = 6, dpi = 400)
+
+# Table of ipw median and IQR 1, 3 by mine_size and c_mine
+tab_ipw_cmine <- qxh_imp_m %>%
+  group_by(c_mine, mine_size) %>%
+  summarise(
+    ipw_median = median(ipw_y, na.rm = TRUE),
+    ipw_Q1 = quantile(ipw_y, 0.25, na.rm = TRUE),
+    ipw_Q3 = quantile(ipw_y, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+tab_ipw_cmine
+
+# Small mines only: density histograms with smoothed lines, faceted by high_att
+
+# Define the small-mine subset (adjust the filter to match your coding)
+qxh_small <- qxh %>%
+  filter(mine_size == "Small") %>%  # if mine_size is coded differently, change this line
+  filter(!is.na(high_att), !is.na(c_mine))
+
+age_hist_small <- ggplot(
+  qxh_small %>% filter(!is.na(age)),
+  aes(x = age, y = after_stat(density), fill = c_mine)
+) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  geom_density(aes(colour = c_mine), linewidth = 0.8, alpha = 0, adjust = 1) +
+  labs(
+    x = "Age",
+    y = "Density",
+    fill = "Cohort mine status",
+    colour = "Cohort mine status"
+  ) +
+  theme_pubr(base_size = 14) +
+  facet_wrap(~ high_att)
+
+all_yrs_hist_small <- ggplot(
+  qxh_small %>% filter(!is.na(all_yrs)),
+  aes(x = all_yrs, y = after_stat(density), fill = c_mine)
+) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 30) +
+  geom_density(aes(colour = c_mine), linewidth = 0.8, alpha = 0, adjust = 1) +
+  labs(
+    x = "Years of work",
+    y = "Density",
+    fill = "Cohort mine status",
+    colour = "Cohort mine status"
+  ) +
+  theme_pubr(base_size = 14) +
+  facet_wrap(~ high_att)
+
+# Arrange with a single shared legend at the bottom
+age_allyrs_hist_small <- ggarrange(
+  age_hist_small + theme(legend.position = "none"),
+  all_yrs_hist_small + theme(legend.position = "none"),
+  ncol = 1,
+  nrow = 2,
+  labels = c("A", "B"),
+  common.legend = TRUE,
+  legend = "bottom"
+)
+
+# And table of mine_size small, median and IQR 1, 3 of age and all_yrs by c_mine and high_att
+tab_age_allyrs_hist_small <- qxh_small %>%
+  group_by(c_mine, high_att) %>%
+  summarise(
+    age_median = median(age, na.rm = TRUE),
+    age_Q1 = quantile(age, 0.25, na.rm = TRUE),
+    age_Q3 = quantile(age, 0.75, na.rm = TRUE),
+    all_yrs_median = median(all_yrs, na.rm = TRUE),
+    all_yrs_Q1 = quantile(all_yrs, 0.25, na.rm = TRUE),
+    all_yrs_Q3 = quantile(all_yrs, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+tab_age_allyrs_hist_small
+
+age_allyrs_hist_small
+
+
+##########################################
+# Fit IPW model with multiple imputation - SENSITIVITY ANALYSIS with adjustment for c_mine #
+##########################################
+
+table(qxh_imp_m$c_mine, useNA = "ifany")
+
+# Fit model across all imputed datasets
+ipw_mod_sens <- with(qxh_imp_m, glm(
+  high_att ~ mine_size * rcs(age, k_age) + mine_size * rcs(all_yrs, k_all_yrs)  + mine_size * tb_pmh_join
+  + mine_size *job_role + mine_size *ever_smok_comb  + mine_size *ses + comb_hiv *mine_size + no_meals*mine_size + c_mine*mine_size,
+  family = binomial(link = "logit")
+))
+
+# Summary of pooled results
+summary(ipw_mod_sens)
+
+# Get predicted probabilities for each imputed dataset
+qxh_imp_m$p_ind_sens <- predict(ipw_mod_sens, type = "response")
+
+summary(qxh_imp_m$p_ind_sens)
+
+# Calculate inverse probability weights (IPW) 
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw_sens = ifelse(high_att == 1, 1 / p_ind_sens, 1 / (1 - p_ind_sens)))
+
+# Stabalise IPW
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw_stab_sens = ifelse(high_att == 1,
+                           p_marg / p_ind_sens,
+                           (1 - p_marg) / (1 - p_ind_sens)))
+
+# Check distribution of stabilized IPW
+Hmisc::describe(qxh_imp_m$ipw_stab_sens)
+
+# What are 99th centiles of stabilized IPW?
+quantile(qxh_imp_m$ipw_stab_sens, probs = 0.99, na.rm = TRUE)
+
+# Truncate at 1st and 99th centiles of IPW
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw_stab_sens = ifelse(ipw_stab_sens < quantile(ipw_stab_sens, 0.01, na.rm = TRUE), 
+                           quantile(ipw_stab_sens, 0.01, na.rm = TRUE), 
+                           ifelse(ipw_stab_sens > quantile(ipw_stab_sens, 0.98, na.rm = TRUE), 
+                                  quantile(ipw_stab_sens, 0.98, na.rm = TRUE), ipw_stab_sens)))
+
+
+# Plot distribution of stabilized IPW by high_att
+ipw_stab_dist_sens <- ggplot(qxh_imp_m, aes(x = ipw_stab_sens, fill = factor(high_att))) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.7) +
+  labs(x = "Stabilised IPW",
+       y = "Count",
+       fill = "High Attendance") +
+  theme_pubr(base_size = 6) +
+  scale_fill_manual(values = c("red", "blue"))
+ipw_stab_dist_sens
+
+# ROC Curve and AUC (Discrimination)
+roc_obj <- roc(qxh_imp_m$high_att, qxh_imp_m$p_ind_sens)
+auc(roc_obj)
+plot(roc_obj, main = "ROC Curve for IPW Model")
+
+# Calibration Plot (Predicted vs Observed)
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(p_bin = ntile(p_ind_sens, 10))
+calib <- qxh_imp_m %>%
+  group_by(p_bin) %>%
+  summarise(mean_p = mean(p_ind_sens),
+            mean_obs = mean(high_att))
+
+calibration <- ggplot(calib, aes(x = mean_p, y = mean_obs)) +
+  geom_point() +
+  geom_abline(linetype = "dashed") +
+  labs(x = "Mean probability of high attendance", 
+       y = "Mean observed high attendance") + 
+  theme_pubr(base_size = 10)
+calibration
+# Arrange two plots 
+ipw_calib <- ggarrange(ipw_stab_dist, calibration, ncol = 2, nrow = 1, labels = c("A", "B"),
+                       legend = "bottom")
+
+# Save the combined plot
+ggsave("ipw_calib_sens.jpg", plot = ipw_calib, width = 8, height = 6, dpi = 400)
+
+# Brier's score
+mean((qxh_imp_m$high_att - qxh_imp_m$p_ind_sens)^2)
+
+# If ipw_mine is NA, set it to 1 - not neccessary
+#qxh_imp_m$ipw_mine[is.na(qxh_imp_m$ipw_mine)] <- 1
+
+# Now multiply ipw_stab by ipw_mine to get final weights ipw 
+qxh_imp_m <- qxh_imp_m %>%
+  mutate(ipw_sens = ipw_stab_sens * ipw_mine)
+
+# Check distribution of final IPW
+Hmisc::describe(qxh_imp_m$ipw_sens)
+
+# Centre ipw with median on 1 to improve model stability by equalling effective sample size to usual sample size
+y_sens <- 1 - mean(qxh_imp_m$ipw_sens, na.rm = TRUE)
+
+# Relevel ipw to make ess the same
+qxh_imp_m$ipw_y_sens <- qxh_imp_m$ipw_sens + y_sens
+
+# Plot distribution of final IPW by high_att
+ipw_sens <- ggplot(qxh_imp_m, aes(x = ipw_y_sens, fill = size_grp)) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.7) +
+  labs(x = "Final IPW",
+       y = "Count",
+       fill = "Mine size") +
+  theme_pubr(base_size = 10) 
+ipw_sens
+
+# Save as RDS
+saveRDS(qxh_imp, file = "qxh_imp.rds")
+
+
+# Remove all variables created in ipw_stab, apart from ipw_stab
+qxh_imp_m <- qxh_imp_m %>%
+  select(-p_ind_sens, -ipw_stab_sens, -p_bin, -c_mine)
+
+# Create new var ipw = 1 for all non-miners
+qxh_imp_nom <- qxh_imp_nom %>%
+  mutate(ipw_sens = 1)
+
+# Combine the two datasets
+qxh_imp <- bind_rows(qxh_imp_m, qxh_imp_nom)
+
+Hmisc::describe(qxh_imp$ipw_sens)
+Hmisc::describe(qxh_imp$ipw)
+
+qxh_imp_ipw_diff <- qxh_imp %>%
+  mutate(ipw_diff = ipw_sens - ipw)
+
+Hmisc::describe(qxh_imp_ipw_diff$ipw_diff)
+
+# Save as RDS
+saveRDS(qxh_imp, file = "qxh_imp.rds")
+
