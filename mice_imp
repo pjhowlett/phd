@@ -1,3 +1,12 @@
+# Load the required libraries for this code
+################################################
+library(dplyr)       # mutate, case_when, select, filter, group_by, summarise, left_join, bind_rows, recode
+library(mice)        # multiple imputation
+library(rms)         # rcs() restricted cubic splines
+library(ggplot2)     # plotting
+library(ggpubr)      # theme_pubr(), ggarrange()
+library(Hmisc)       # describe()
+library(pROC)        # roc(), auc()
 
 ################################################
 # Multiple chain imputation for whole data set #
